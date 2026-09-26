@@ -219,8 +219,8 @@ async function api<T>(path: string, options?: RequestInit): Promise<T> {
     cache: "no-store",
   });
 
-  // If 404 on serverless instance, auto-sync local workspace to populate container and retry
-  if (response.status === 404 && (path.includes("/api/requirements") || path.includes("/api/cases"))) {
+  // If 404/409 on serverless instance, auto-sync local workspace to populate container and retry
+  if ((response.status === 404 || response.status === 409) && !path.includes("/api/workspace/sync")) {
     const local = getLocalWorkspace();
     if (local.requirements.length > 0 || local.allCases.length > 0) {
       try {
@@ -747,13 +747,14 @@ export default function Workbench() {
                       case_ids: caseIds,
                       requirement_id: selected.id,
                       credentials: creds,
+                      cases: casesForStory.filter((c) => caseIds.includes(c.id)),
                     }),
                   }
                 );
                 setNotice(
                   `Batch execution completed (Run ${res.run_id}). Passed: ${
-                    res.summary.PASS ?? 0
-                  }, Failed: ${res.summary.FAIL ?? 0}.`
+                    res.summary?.PASS ?? 0
+                  }, Failed: ${res.summary?.FAIL ?? 0}.`
                 );
                 await refresh(selected.id);
               });

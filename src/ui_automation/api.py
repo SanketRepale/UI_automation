@@ -95,6 +95,7 @@ class BatchExecutionInput(BaseModel):
     case_ids: list[str] = Field(min_length=1, max_length=500)
     requirement_id: str = Field(min_length=1, max_length=120)
     credentials: CredentialsInput | None = None
+    cases: list[dict[str, Any]] | None = None
 
 
 class SettingsUpdateInput(BaseModel):
@@ -206,9 +207,9 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
         request.state.request_id = request_id
         try:
             response = await call_next(request)
-        except Exception:
+        except Exception as error:
             services.logger.exception("api_request_failed", extra={"request_id": request_id, "path": request.url.path})
-            response = JSONResponse(status_code=500, content={"detail": "An unexpected server error occurred", "request_id": request_id})
+            response = JSONResponse(status_code=500, content={"detail": f"An unexpected server error occurred: {error}", "request_id": request_id})
         response.headers["X-Request-ID"] = request_id
         return response
 
@@ -558,7 +559,7 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
                 "test_case_id": case_id,
                 "status": "PASS",
                 "duration": round(len(step_results) * 0.12, 2),
-                "error": None,
+                "error": "",
                 "steps": step_results,
             }
             services.repository.create_run(run_id, target_url, f"{browser_label} (serverless)")
@@ -579,7 +580,6 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
     @api.post("/api/execution/batch", dependencies=[Depends(authenticate)])
     async def execute_batch(request: BatchExecutionInput) -> dict[str, Any]:
         from collections import Counter
-        req = _require_requirement(services.repository, request.requirement_id)
         target = services.repository.requirement_target(request.requirement_id)
         target_url = (target["application_url"] if target else "https://example.com") or "https://example.com"
         browser_name = (target.get("browser") if target else "chromium") or "chromium"
@@ -588,9 +588,19 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
         if not _browser_execution_enabled():
             # Serverless simulated execution
             services.repository.create_run(run_id, target_url, f"{browser_name} (serverless)")
+            cases_pool: dict[str, Any] = {c["id"]: c for c in services.repository.test_cases()}
+            if request.cases:
+                for c in request.cases:
+                    if isinstance(c, dict) and c.get("id"):
+                        cases_pool[c["id"]] = c
+                        try:
+                            services.repository.save_test_case(c)
+                        except Exception:
+                            pass
+
             outcomes = []
             for case_id in request.case_ids:
-                case = next((c for c in services.repository.test_cases() if c["id"] == case_id), None)
+                case = cases_pool.get(case_id)
                 if not case:
                     continue
                 step_results = []
@@ -608,7 +618,7 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
                     "test_case_id": case_id,
                     "status": "PASS",
                     "duration": round(len(step_results) * 0.12, 2),
-                    "error": None,
+                    "error": "",
                     "steps": step_results,
                 }
                 services.repository.save_result(run_id, case_id, outcome["status"], outcome["duration"], outcome["error"], {"mode": "serverless"}, outcome["steps"])
@@ -620,6 +630,7 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
             services.repository.finish_run(run_id, summary)
             return {"run_id": run_id, "summary": summary, "outcomes": outcomes}
 
+        req = _require_requirement(services.repository, request.requirement_id)
         if not target:
             raise HTTPException(status_code=409, detail="Configure a target environment for this story first")
         from ui_automation.executor import ExecutionService

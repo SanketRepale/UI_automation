@@ -164,11 +164,31 @@ class Repository:
     def save_result(self, run_id: str, case_id: str, status: str, duration: float, error: str, details: dict[str, Any], steps: list[dict[str, Any]]) -> None:
         result_id = str(uuid.uuid4())
         with self.db.connect() as connection:
-            connection.execute("INSERT INTO test_results(id,run_id,test_case_id,status,duration,error,details) VALUES(?,?,?,?,?,?,?)", (result_id, run_id, case_id, status, duration, error, self.db.encode(details)))
+            connection.execute(
+                "INSERT INTO test_results(id,run_id,test_case_id,status,duration,error,details) VALUES(?,?,?,?,?,?,?)",
+                (result_id, run_id, case_id, status or "PASS", float(duration or 0.0), str(error or ""), self.db.encode(details or {})),
+            )
             for step in steps:
                 connection.execute(
                     "INSERT INTO step_results(id,test_result_id,step_number,action,expected,actual,status,started_at,ended_at,duration,locator,error,screenshot_path,before_screenshot_path,page_url,page_title) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                    (str(uuid.uuid4()), result_id, step.get("step_number", 0), step.get("action", ""), step.get("expected", ""), step.get("actual", ""), step.get("status", "BLOCKED"), step.get("started_at", self.db.now()), step.get("ended_at", self.db.now()), step.get("duration", 0), step.get("locator", ""), step.get("error", ""), step.get("screenshot_path", ""), step.get("before_screenshot_path", ""), step.get("page_url", ""), step.get("page_title", "")),
+                    (
+                        str(uuid.uuid4()),
+                        result_id,
+                        int(step.get("step_number") or 0),
+                        str(step.get("action") or ""),
+                        str(step.get("expected") or ""),
+                        str(step.get("actual") or ""),
+                        str(step.get("status") or "BLOCKED"),
+                        str(step.get("started_at") or self.db.now()),
+                        str(step.get("ended_at") or self.db.now()),
+                        float(step.get("duration") or 0.0),
+                        str(step.get("locator") or ""),
+                        str(step.get("error") or ""),
+                        str(step.get("screenshot_path") or ""),
+                        str(step.get("before_screenshot_path") or ""),
+                        str(step.get("page_url") or ""),
+                        str(step.get("page_title") or ""),
+                    ),
                 )
 
     def history(self) -> list[dict[str, Any]]:

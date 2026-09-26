@@ -1,6 +1,7 @@
 "use client";
 
 import { ChangeEvent, useEffect, useState } from "react";
+import Workbench from "./workbench";
 
 type Requirement = {
   id: string;
@@ -25,7 +26,7 @@ async function api<T>(path: string, options?: RequestInit): Promise<T> {
   return payload as T;
 }
 
-export default function Home() {
+function LegacyHome() {
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
   const [requirements, setRequirements] = useState<Requirement[]>([]);
   const [selected, setSelected] = useState<Requirement | null>(null);
@@ -124,3 +125,5 @@ export default function Home() {
 }
 
 function Metric({ label, value, detail }: { label: string; value: string | number; detail: string }) { return <div className="metric"><span>{label}</span><strong>{value}</strong><small>{detail}</small></div>; }
+
+export default function Home() { return <Workbench />; }

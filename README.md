@@ -45,12 +45,12 @@ Run the production API and UI in separate terminals:
 
 ```powershell
 uvicorn api.index:app --reload --port 8000
-npm install --prefix web
+npm install
 $env:NEXT_PUBLIC_API_BASE_URL="http://localhost:8000"
 npm run dev --prefix web
 ```
 
-The production UI is available at `http://localhost:3000`; API docs are at `http://localhost:8000/api/docs`. The root `requirements.txt` is intentionally API-only for serverless deployment; use `requirements-local.txt` for Streamlit and Playwright.
+The production UI is available at `http://localhost:3000`; API docs are at `http://localhost:8000/api/docs`. The root npm workspace/lockfile is the source of truth; install with `npm install` from the repository root. The root `requirements.txt` is intentionally API-only for serverless deployment; use `requirements-local.txt` for Streamlit and Playwright.
 
 ## Vercel deployment
 

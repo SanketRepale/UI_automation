@@ -5,7 +5,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from ui_automation.api import create_app
-from ui_automation.config import Settings, _env_int
+from ui_automation.config import Settings, _env_int, _runtime_data_dir
 
 
 def test_empty_or_invalid_integer_environment_values_use_defaults(monkeypatch) -> None:
@@ -13,6 +13,14 @@ def test_empty_or_invalid_integer_environment_values_use_defaults(monkeypatch) -
     assert _env_int("TIMEOUT_MS", 10000) == 10000
     monkeypatch.setenv("TIMEOUT_MS", "not-a-number")
     assert _env_int("TIMEOUT_MS", 10000) == 10000
+
+
+def test_vercel_uses_writable_runtime_data_directory(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("VERCEL", "1")
+    monkeypatch.delenv("DATA_DIR", raising=False)
+    assert _runtime_data_dir() == Path("/tmp/ui-automation")
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    assert _runtime_data_dir() == tmp_path
 
 
 def test_api_health_and_story_target_round_trip(tmp_path: Path) -> None:

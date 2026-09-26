@@ -18,13 +18,25 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _runtime_data_dir() -> Path:
+    configured = os.getenv("DATA_DIR", "").strip()
+    if configured:
+        return Path(configured)
+    if os.getenv("VERCEL", "").lower() == "1":
+        return Path("/tmp/ui-automation")
+    return ROOT_DIR / "data"
+
+
+DATA_DIR = _runtime_data_dir()
+
+
 @dataclass(frozen=True)
 class Settings:
-    database_path: Path = ROOT_DIR / "data" / "automation.db"
-    uploads_dir: Path = ROOT_DIR / "data" / "uploaded_documents"
-    evidence_dir: Path = ROOT_DIR / "data" / "evidence"
-    scripts_dir: Path = ROOT_DIR / "data" / "generated_scripts"
-    reports_dir: Path = ROOT_DIR / "data" / "reports"
+    database_path: Path = DATA_DIR / "automation.db"
+    uploads_dir: Path = DATA_DIR / "uploaded_documents"
+    evidence_dir: Path = DATA_DIR / "evidence"
+    scripts_dir: Path = DATA_DIR / "generated_scripts"
+    reports_dir: Path = DATA_DIR / "reports"
     skills_dir: Path = ROOT_DIR / "skills"
     llm_provider: str = os.getenv("LLM_PROVIDER", "openai_compatible")
     llm_base_url: str = os.getenv("LLM_BASE_URL", "https://api.openai.com/v1")

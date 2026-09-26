@@ -2763,7 +2763,7 @@ function SettingsView({
             ? "https://api.anthropic.com/v1"
             : "https://api.openai.com/v1")
       );
-      setModel(settings.llm_model || (settings.llm_provider === "gemini" ? "gemini-2.5-flash" : ""));
+      setModel(settings.llm_model || (settings.llm_provider === "gemini" ? "gemini-3.7-flash" : ""));
       setBrowser(settings.browser || "chromium");
       setHeadless(settings.headless ?? true);
       setTimeoutMs(settings.timeout_ms || 10000);
@@ -2802,8 +2802,8 @@ function SettingsView({
               setProvider(nextP);
               if (nextP === "gemini") {
                 setBaseUrl("https://generativelanguage.googleapis.com/v1beta");
-                if (!model || model.startsWith("gpt-") || model.startsWith("claude-") || model === "gemini-1.5-flash") {
-                  setModel("gemini-2.5-flash");
+                if (!model || model.startsWith("gpt-") || model.startsWith("claude-") || model.includes("flash")) {
+                  setModel("gemini-3.7-flash");
                 }
               } else if (nextP === "anthropic") {
                 setBaseUrl("https://api.anthropic.com/v1");

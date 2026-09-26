@@ -28,11 +28,11 @@ class LLMProvider:
         if not self.configured:
             raise LLMError("LLM is not configured. Set LLM_MODEL and LLM_API_KEY, or use the clearly labeled offline draft mode.")
         if self.provider in {"gemini", "google"}:
-            preferred = (self.model or "gemini-2.5-flash").strip()
+            preferred = (self.model or "gemini-3.7-flash").strip()
             if preferred.startswith("models/"):
                 preferred = preferred[7:]
             models_to_try = [preferred]
-            for fallback in ("gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"):
+            for fallback in ("gemini-3.7-flash", "gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"):
                 if fallback not in models_to_try:
                     models_to_try.append(fallback)
 

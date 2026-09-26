@@ -29,7 +29,7 @@ from ui_automation.utils import configure_logging, log_event
 
 
 class TargetInput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     application_url: HttpUrl
     authentication_type: str = Field(default="No Authentication", max_length=80)
@@ -42,21 +42,21 @@ class TargetInput(BaseModel):
 
 
 class CredentialsInput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     username: str = Field(min_length=1, max_length=320)
     password: str = Field(min_length=1, max_length=1024)
 
 
 class DiscoveryInput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     target: TargetInput
     credentials: CredentialsInput | None = None
 
 
 class ScriptInput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     case_id: str = Field(min_length=1, max_length=120)
 
@@ -76,13 +76,13 @@ class CaseInput(BaseModel):
 
 
 class ScriptSaveInput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     source: str = Field(min_length=1, max_length=500_000)
 
 
 class SuiteInput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     name: str = Field(min_length=1, max_length=160)
     description: str = Field(default="", max_length=2000)
@@ -90,7 +90,7 @@ class SuiteInput(BaseModel):
 
 
 class BatchExecutionInput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     case_ids: list[str] = Field(min_length=1, max_length=500)
     requirement_id: str = Field(min_length=1, max_length=120)

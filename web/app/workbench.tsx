@@ -286,6 +286,26 @@ export default function Workbench() {
 
   async function refresh(targetId = selectedId) {
     try {
+      // Proactively sync local workspace to the (ephemeral) server DB on every refresh.
+      // This ensures cold-started Vercel instances always have the latest data.
+      const local = getLocalWorkspace();
+      if (local.requirements.length > 0 || local.allCases.length > 0) {
+        try {
+          await fetch(`${API_BASE}/api/workspace/sync`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              requirements: local.requirements,
+              cases: local.allCases,
+              targets: Object.values(local.targets),
+              locators: local.locators,
+            }),
+          });
+        } catch {
+          // Non-fatal: server may be temporarily unreachable
+        }
+      }
+
       const [summary, stories, cases, history, savedSuites, reportData, settingsData] =
         await Promise.all([
           api<typeof dashboard>("/api/dashboard"),
@@ -297,15 +317,33 @@ export default function Workbench() {
           api<SettingsView>("/api/settings"),
         ]);
 
-      const local = getLocalWorkspace();
       const storyMap = new Map<string, Requirement>();
       local.requirements.forEach((r) => storyMap.set(r.id, r));
       stories.forEach((r) => storyMap.set(r.id, { ...storyMap.get(r.id), ...r }));
       const mergedStories = Array.from(storyMap.values());
 
+      // Merge cases: local is the source of truth for status on ephemeral servers.
+      // If the local version is Approved/Rejected but server says Draft, keep local status.
       const caseMap = new Map<string, TestCase>();
       local.allCases.forEach((c) => caseMap.set(c.id, c));
-      cases.forEach((c) => caseMap.set(c.id, { ...caseMap.get(c.id), ...c }));
+      cases.forEach((c) => {
+        const existing = caseMap.get(c.id);
+        if (existing) {
+          const localStatus = existing.status;
+          const serverStatus = c.status;
+          // Preserve local approval status if server has stale Draft
+          const keepLocalStatus =
+            (localStatus === "Approved" || localStatus === "Rejected") &&
+            serverStatus === "Draft";
+          caseMap.set(c.id, {
+            ...existing,
+            ...c,
+            status: keepLocalStatus ? localStatus : serverStatus,
+          });
+        } else {
+          caseMap.set(c.id, c);
+        }
+      });
       const mergedCases = Array.from(caseMap.values());
 
       updateLocalWorkspace({ requirements: mergedStories, allCases: mergedCases });

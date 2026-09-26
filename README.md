@@ -33,7 +33,7 @@ Use Python 3.11 or newer. From this folder:
 ```powershell
 py -3.13 -m venv .venv
 .\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
+pip install -r requirements-local.txt
 playwright install chromium
 Copy-Item .env.example .env
 streamlit run app.py
@@ -50,7 +50,7 @@ $env:NEXT_PUBLIC_API_BASE_URL="http://localhost:8000"
 npm run dev --prefix web
 ```
 
-The production UI is available at `http://localhost:3000`; API docs are at `http://localhost:8000/api/docs`. Run `streamlit run app.py` independently when validating the original local workbench.
+The production UI is available at `http://localhost:3000`; API docs are at `http://localhost:8000/api/docs`. The root `requirements.txt` is intentionally API-only for serverless deployment; use `requirements-local.txt` for Streamlit and Playwright.
 
 ## Vercel deployment
 

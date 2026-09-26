@@ -18,9 +18,7 @@ from ui_automation.agents import PlaywrightScriptAgent, RequirementAgent, TestCa
 from ui_automation.config import Settings, settings
 from ui_automation.database import Database
 from ui_automation.documents import extract_text
-from ui_automation.executor import ExecutionService
 from ui_automation.llm import LLMProvider
-from ui_automation.locator_service import LocatorService
 from ui_automation.repository import Repository
 from ui_automation.utils import configure_logging, log_event
 
@@ -225,6 +223,8 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
         _require_requirement(services.repository, requirement_id)
         if os.getenv("EXECUTION_ENABLED", "true").lower() != "true":
             raise HTTPException(status_code=503, detail="Browser discovery is disabled for this deployment")
+        from ui_automation.locator_service import LocatorService
+
         target = request.target.model_dump(mode="json")
         credentials = _runtime_credentials(services.settings, request.credentials.model_dump() if request.credentials else None)
         authentication = {**target, **credentials} if credentials else target
@@ -258,6 +258,8 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
             raise HTTPException(status_code=400, detail="Case identifiers do not match")
         if os.getenv("EXECUTION_ENABLED", "true").lower() != "true":
             raise HTTPException(status_code=503, detail="Browser execution is disabled for this deployment")
+        from ui_automation.executor import ExecutionService
+
         case = _require_case(services.repository, case_id)
         context = _case_context(services.repository, case)
         run_id = f"RUN-{uuid.uuid4()}"

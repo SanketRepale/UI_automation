@@ -86,8 +86,10 @@ class LocatorService:
             return results
 
     @staticmethod
-    def _guidance_matches(guidance: str, element: dict[str, Any]) -> list[str]:
-        terms = set(re.findall(r"[a-z0-9]+", guidance.lower()))
+    def _guidance_matches(guidance: str | None, element: dict[str, Any]) -> list[str]:
+        if not guidance:
+            return []
+        terms = set(re.findall(r"[a-z0-9]+", str(guidance).lower()))
         terms = {term for term in terms if len(term) > 2} - {"the", "and", "for", "with", "from", "that", "this", "button", "field", "element"}
         searchable = " ".join(str(element.get(key, "")) for key in ("text", "visible_text", "tag", "id", "name", "placeholder", "aria_label", "role", "test_id")).lower()
         return sorted(term for term in terms if re.search(rf"\b{re.escape(term)}\b", searchable))

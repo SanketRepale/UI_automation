@@ -654,7 +654,7 @@ export default function Workbench() {
             onDiscover={(target, creds) =>
               selected &&
               act("Inspecting live DOM and discovering shared locators...", async () => {
-                const result = await api<{ count: number }>(
+                const result = await api<{ count: number; locators?: Locator[] }>(
                   `/api/requirements/${selected.id}/discover`,
                   { method: "POST", body: JSON.stringify({ target, credentials: creds }) }
                 );
@@ -664,8 +664,17 @@ export default function Workbench() {
                     [selected.id]: creds,
                   }));
                 }
+                if (result.locators && result.locators.length > 0) {
+                  const local = getLocalWorkspace();
+                  const mergedLocs = [
+                    ...result.locators,
+                    ...local.locators.filter((l) => !result.locators!.some((nl) => nl.element === l.element)),
+                  ];
+                  updateLocalWorkspace({ locators: mergedLocs });
+                  setSelected((curr) => (curr ? { ...curr, locators: result.locators } : null));
+                }
                 setNotice(`Discovered and validated ${result.count} shared elements.`);
-                await refresh(selected.id);
+                refresh(selected.id).catch(() => {});
               })
             }
           />

@@ -363,25 +363,34 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
 
     @api.post("/api/requirements/{requirement_id}/discover", dependencies=[Depends(authenticate)])
     async def discover(requirement_id: str, request: DiscoveryInput) -> dict[str, Any]:
-        req = _require_requirement(services.repository, requirement_id)
+        req = next((r for r in services.repository.requirements() if r["id"] == requirement_id), None)
+        if not req:
+            req = {"id": requirement_id, "analysis": {}}
         target = request.target.model_dump(mode="json")
         credentials = _runtime_credentials(services.settings, request.credentials.model_dump() if request.credentials else None)
         authentication = {**target, **credentials} if credentials else target
-        from ui_automation.locator_service import LocatorService
+        app_url = str(target.get("application_url") or "")
+        guidance = str(target.get("guidance") or "")
 
+        from ui_automation.locator_service import LocatorService
         locator_svc = LocatorService(services.settings)
-        if _browser_execution_enabled():
-            try:
-                locators = locator_svc.discover(str(target["application_url"]), target.get("browser"), authentication if target.get("authentication_type") == "Username & Password" else None, target.get("guidance", ""))
-            except Exception as err:
-                services.logger.warning("Browser discovery failed: %s; falling back to remote HTML/AI discovery", err)
-                locators = locator_svc.discover_fallback(str(target["application_url"]), target.get("guidance", ""), req.get("analysis", {}), services.provider())
-        else:
-            locators = locator_svc.discover_fallback(str(target["application_url"]), target.get("guidance", ""), req.get("analysis", {}), services.provider())
+
+        try:
+            if _browser_execution_enabled():
+                try:
+                    locators = locator_svc.discover(app_url, target.get("browser"), authentication if target.get("authentication_type") == "Username & Password" else None, guidance)
+                except Exception as err:
+                    services.logger.warning("Browser discovery failed: %s; falling back to remote HTML/AI discovery", err)
+                    locators = locator_svc.discover_fallback(app_url, guidance, req.get("analysis", {}), services.provider())
+            else:
+                locators = locator_svc.discover_fallback(app_url, guidance, req.get("analysis", {}), services.provider())
+        except Exception as err:
+            services.logger.exception("Discovery failed: %s; falling back to default locators", err)
+            locators = locator_svc.discover_fallback(app_url, guidance, req.get("analysis", {}), None)
 
         for item in locators:
             services.repository.save_locator({**item, "requirement_id": requirement_id, "test_case_id": None})
-        services.repository.save_requirement_target({**target, "application_url": str(target["application_url"]), "requirement_id": requirement_id})
+        services.repository.save_requirement_target({**target, "application_url": app_url, "requirement_id": requirement_id})
         return {"count": len(locators), "locators": services.repository.locators(requirement_id=requirement_id)}
 
     @api.post("/api/requirements/{requirement_id}/generate", dependencies=[Depends(authenticate)])

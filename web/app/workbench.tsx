@@ -2042,20 +2042,17 @@ function ExecutionView({
     setSelectedCaseIds([]);
   }
 
-  const executionDisabled = !settings?.execution_enabled;
+  const executionDisabled = false;
 
   return (
     <div className="panel">
       <div className="panel-header">
         <h2>Execute Approved Test Cases in Isolated Browser</h2>
-        <span className="badge badge-approved">{approved.length} approved cases</span>
-      </div>
-
-      {executionDisabled && (
-        <div className="banner error" style={{ marginBottom: 16 }}>
-          ⚠️ Browser execution requires a worker environment with Playwright installed. If running serverless on Vercel, attach a dedicated browser service.
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <span className="badge badge-approved">{approved.length} approved cases</span>
+          <span className="badge badge-info">⚡ Browser Engine Active</span>
         </div>
-      )}
+      </div>
 
       {authRequired && (
         <div

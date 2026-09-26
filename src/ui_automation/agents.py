@@ -32,16 +32,20 @@ class RequirementAgent(SkillAgent):
         safe_text = redact_credentials(combined)
         prompt = json.dumps({"uploaded_documents": safe_text})
         if self.llm.configured:
-            result = self.llm.complete_json(system=self.skill(), user=prompt)
-            result.setdefault("user_story", "")
-            result.setdefault("acceptance_criteria", [])
-            result.setdefault("business_rules", [])
-            result.setdefault("scenarios", {"positive": [], "negative": [], "boundary": []})
-            result.setdefault("test_data_requirements", [])
-            result.setdefault("automation_gaps", [])
-            result.setdefault("ambiguities", [])
-            result["application_details"] = {key: value for key, value in application.items() if key not in {"username", "password"}}
-            return result, application, "LLM-assisted (credentials excluded from prompt)"
+            try:
+                result = self.llm.complete_json(system=self.skill(), user=prompt)
+                result.setdefault("user_story", "")
+                result.setdefault("acceptance_criteria", [])
+                result.setdefault("business_rules", [])
+                result.setdefault("scenarios", {"positive": [], "negative": [], "boundary": []})
+                result.setdefault("test_data_requirements", [])
+                result.setdefault("automation_gaps", [])
+                result.setdefault("ambiguities", [])
+                result["application_details"] = {key: value for key, value in application.items() if key not in {"username", "password"}}
+                return result, application, "LLM-assisted (credentials excluded from prompt)"
+            except Exception as err:
+                import logging
+                logging.getLogger("ui_automation").warning("LLM requirement analysis failed: %s; falling back to offline extraction", err)
 
         story_match = re.search(r"(?im)^.*\bAs\s+(?:a|an|the)\s+.+?(?:\r?\n(?:.{0,4}\S.*)?){0,2}", safe_text)
         story = "\n".join(line.strip() for line in story_match.group(0).splitlines()).strip() if story_match else ""
@@ -75,12 +79,16 @@ class TestCaseAgent(SkillAgent):
 
     def generate(self, requirement_id: str, analysis: dict[str, Any]) -> tuple[list[dict[str, Any]], str]:
         if self.llm.configured:
-            result = self.llm.complete_json(system=self.skill(), user=json.dumps({"requirement_id": requirement_id, "analysis": analysis}))
-            cases = result.get("test_cases", [])
-            normalized = [normalize_case(case, requirement_id, index) for index, case in enumerate(cases, 1)]
-            limited = _limit_story_cases(normalized)
-            _populate_step_test_data(limited, analysis)
-            return limited, "LLM-assisted"
+            try:
+                result = self.llm.complete_json(system=self.skill(), user=json.dumps({"requirement_id": requirement_id, "analysis": analysis}))
+                cases = result.get("test_cases", [])
+                normalized = [normalize_case(case, requirement_id, index) for index, case in enumerate(cases, 1)]
+                limited = _limit_story_cases(normalized)
+                _populate_step_test_data(limited, analysis)
+                return limited, "LLM-assisted"
+            except Exception as err:
+                import logging
+                logging.getLogger("ui_automation").warning("LLM test case generation failed: %s; falling back to offline draft", err)
 
         criteria = [str(item).strip() for item in analysis.get("acceptance_criteria", []) if str(item).strip()]
         if not criteria:

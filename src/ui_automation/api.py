@@ -351,6 +351,7 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
         except HTTPException:
             raise
         except Exception as error:
+            services.logger.exception("Requirement analysis failed: %s", error)
             raise HTTPException(status_code=422, detail=f"Requirement analysis failed: {error}") from error
 
     @api.put("/api/requirements/{requirement_id}/target", dependencies=[Depends(authenticate)])

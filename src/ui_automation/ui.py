@@ -684,7 +684,7 @@ def _settings(settings: Settings, llm: LLMProvider) -> None:
         default_base_url = settings.llm_base_url or "https://api.openai.com/v1"
     saved_base_url = st.session_state.get("llm_base_url") if st.session_state.get("llm_provider") == provider else default_base_url
     base_url = st.text_input("Provider API base URL", saved_base_url or default_base_url)
-    default_model = "gemini-1.5-flash" if provider == "gemini" else settings.llm_model
+    default_model = "gemini-2.5-flash" if provider == "gemini" else settings.llm_model
     model = st.text_input("Model name", st.session_state.get("llm_model", default_model))
     api_key = st.text_input("API key", st.session_state.get("llm_api_key", settings.llm_api_key), type="password")
     if st.button("Apply for this session"):

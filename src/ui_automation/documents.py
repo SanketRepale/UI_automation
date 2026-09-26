@@ -13,7 +13,7 @@ from pypdf import PdfReader
 
 def extract_text(filename: str, content: bytes) -> str:
     suffix = Path(filename).suffix.lower()
-    if suffix in {".txt", ".md", ".markdown", ".rst"}:
+    if suffix in {".txt", ".md", ".markdown", ".rst", ".json", ".yaml", ".yml", ".feature", ".html", ".htm", ".xml", ".log", ".ini", ".cfg", ".tsv"}:
         return content.decode("utf-8", errors="replace")
     if suffix == ".pdf":
         return "\n".join(page.extract_text() or "" for page in PdfReader(io.BytesIO(content)).pages)
@@ -34,6 +34,13 @@ def extract_text(filename: str, content: bytes) -> str:
             lines.append(f"Sheet: {sheet.title}")
             lines.extend(" | ".join(str(value or "") for value in row) for row in sheet.iter_rows(values_only=True))
         return "\n".join(lines)
+    # Fallback: attempt to decode as UTF-8 text if it doesn't look like binary
+    try:
+        decoded = content.decode("utf-8", errors="replace")
+        if "\x00" not in decoded[:1024]:
+            return decoded
+    except Exception:
+        pass
     raise ValueError(f"Unsupported file type: {suffix or 'no extension'}")
 
 

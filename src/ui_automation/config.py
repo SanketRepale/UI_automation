@@ -50,7 +50,7 @@ class Settings:
     )
     llm_model: str = os.getenv(
         "LLM_MODEL",
-        "gemini-1.5-flash"
+        "gemini-2.5-flash"
         if (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or os.getenv("LLM_PROVIDER") in {"gemini", "google"})
         else ""
     )

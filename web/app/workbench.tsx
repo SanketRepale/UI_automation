@@ -2754,14 +2754,16 @@ function SettingsView({
 
   useEffect(() => {
     if (settings) {
-      setProvider(settings.llm_provider || "openai_compatible");
+      setProvider(settings.llm_provider || "gemini");
       setBaseUrl(
         settings.llm_base_url ||
-          (settings.llm_provider === "anthropic"
+          (settings.llm_provider === "gemini"
+            ? "https://generativelanguage.googleapis.com/v1beta"
+            : settings.llm_provider === "anthropic"
             ? "https://api.anthropic.com/v1"
             : "https://api.openai.com/v1")
       );
-      setModel(settings.llm_model || "");
+      setModel(settings.llm_model || (settings.llm_provider === "gemini" ? "gemini-1.5-flash" : ""));
       setBrowser(settings.browser || "chromium");
       setHeadless(settings.headless ?? true);
       setTimeoutMs(settings.timeout_ms || 10000);
@@ -2787,7 +2789,7 @@ function SettingsView({
           <h2>LLM Provider & Credentials</h2>
         </div>
         <p style={{ color: "var(--text-dim)", fontSize: "0.84rem" }}>
-          Configure hosted LLM provider settings (OpenAI-compatible or Anthropic Messages). If left
+          Configure hosted LLM provider settings (Google Gemini, OpenAI-compatible, or Anthropic Messages). If left
           unconfigured, the system runs in offline draft mode with deterministic heuristics.
         </p>
 
@@ -2798,13 +2800,25 @@ function SettingsView({
             onChange={(e) => {
               const nextP = e.target.value;
               setProvider(nextP);
-              if (nextP === "anthropic") {
+              if (nextP === "gemini") {
+                setBaseUrl("https://generativelanguage.googleapis.com/v1beta");
+                if (!model || model.startsWith("gpt-") || model.startsWith("claude-")) {
+                  setModel("gemini-1.5-flash");
+                }
+              } else if (nextP === "anthropic") {
                 setBaseUrl("https://api.anthropic.com/v1");
+                if (!model || model.startsWith("gemini-") || model.startsWith("gpt-")) {
+                  setModel("claude-3-5-sonnet-20241022");
+                }
               } else {
                 setBaseUrl("https://api.openai.com/v1");
+                if (!model || model.startsWith("gemini-") || model.startsWith("claude-")) {
+                  setModel("gpt-4o");
+                }
               }
             }}
           >
+            <option value="gemini">Google Gemini (Recommended)</option>
             <option value="openai_compatible">OpenAI-Compatible Chat Completions</option>
             <option value="anthropic">Anthropic Messages</option>
           </select>
@@ -2823,7 +2837,7 @@ function SettingsView({
           <label>Model Name</label>
           <input
             type="text"
-            placeholder="e.g. gpt-4o, claude-3-5-sonnet-20241022"
+            placeholder="e.g. gemini-1.5-flash, gemini-2.0-flash, gemini-2.5-flash, gpt-4o"
             value={model}
             onChange={(e) => setModel(e.target.value)}
           />

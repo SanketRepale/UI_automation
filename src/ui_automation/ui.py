@@ -673,12 +673,19 @@ def _reporting(repository: Repository) -> None:
 def _settings(settings: Settings, llm: LLMProvider) -> None:
     _title("Workspace / Config", "Settings", "Credentials are kept in process memory in this form and are never written to the database.")
     st.subheader("LLM provider")
-    configured_provider = st.session_state.get("llm_provider", settings.llm_provider)
-    provider = st.selectbox("Provider", ["openai_compatible", "anthropic"], index=1 if configured_provider == "anthropic" else 0)
-    default_base_url = "https://api.anthropic.com/v1" if provider == "anthropic" else settings.llm_base_url
+    providers = ["gemini", "openai_compatible", "anthropic"]
+    provider_idx = providers.index(configured_provider) if configured_provider in providers else 0
+    provider = st.selectbox("Provider", providers, index=provider_idx)
+    if provider == "gemini":
+        default_base_url = "https://generativelanguage.googleapis.com/v1beta"
+    elif provider == "anthropic":
+        default_base_url = "https://api.anthropic.com/v1"
+    else:
+        default_base_url = settings.llm_base_url or "https://api.openai.com/v1"
     saved_base_url = st.session_state.get("llm_base_url") if st.session_state.get("llm_provider") == provider else default_base_url
     base_url = st.text_input("Provider API base URL", saved_base_url or default_base_url)
-    model = st.text_input("Model name", st.session_state.get("llm_model", settings.llm_model))
+    default_model = "gemini-1.5-flash" if provider == "gemini" else settings.llm_model
+    model = st.text_input("Model name", st.session_state.get("llm_model", default_model))
     api_key = st.text_input("API key", st.session_state.get("llm_api_key", settings.llm_api_key), type="password")
     if st.button("Apply for this session"):
         st.session_state["llm_provider"] = provider
@@ -687,7 +694,7 @@ def _settings(settings: Settings, llm: LLMProvider) -> None:
         st.session_state["llm_api_key"] = api_key
         st.success("Provider settings applied to this Streamlit session only.")
         st.rerun()
-    st.info("For persistent configuration, copy `.env.example` to `.env` and set LLM_PROVIDER, LLM_BASE_URL, LLM_MODEL, and LLM_API_KEY. Supported adapters: OpenAI-compatible chat completions and Anthropic Messages API.")
+    st.info("For persistent configuration, copy `.env.example` to `.env` or set GEMINI_API_KEY / LLM_API_KEY in your deployment environment.")
     st.subheader("Browser and target")
     st.code(f"TARGET_URL={'configured' if settings.target_url else 'not configured'}\nBROWSER={settings.browser or 'not configured'}\nHEADLESS={'headless' if settings.mode_configured and settings.headless else 'headed' if settings.mode_configured else 'not configured'}\nTIMEOUT_MS={settings.timeout_ms}", language="text")
     st.caption(f"Database: {settings.database_path}\n\nEvidence: {settings.evidence_dir}")

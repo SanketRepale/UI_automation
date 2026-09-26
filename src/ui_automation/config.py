@@ -38,10 +38,23 @@ class Settings:
     scripts_dir: Path = DATA_DIR / "generated_scripts"
     reports_dir: Path = DATA_DIR / "reports"
     skills_dir: Path = ROOT_DIR / "skills"
-    llm_provider: str = os.getenv("LLM_PROVIDER", "openai_compatible")
-    llm_base_url: str = os.getenv("LLM_BASE_URL", "https://api.openai.com/v1")
-    llm_model: str = os.getenv("LLM_MODEL", "")
-    llm_api_key: str = os.getenv("LLM_API_KEY", "")
+    llm_provider: str = os.getenv(
+        "LLM_PROVIDER",
+        "gemini" if (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")) else "openai_compatible"
+    )
+    llm_base_url: str = os.getenv(
+        "LLM_BASE_URL",
+        "https://generativelanguage.googleapis.com/v1beta"
+        if (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or os.getenv("LLM_PROVIDER") in {"gemini", "google"})
+        else "https://api.openai.com/v1"
+    )
+    llm_model: str = os.getenv(
+        "LLM_MODEL",
+        "gemini-1.5-flash"
+        if (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or os.getenv("LLM_PROVIDER") in {"gemini", "google"})
+        else ""
+    )
+    llm_api_key: str = os.getenv("LLM_API_KEY", "") or os.getenv("GEMINI_API_KEY", "") or os.getenv("GOOGLE_API_KEY", "")
     target_url: str = os.getenv("TARGET_URL", "")
     authentication_type: str = os.getenv("AUTHENTICATION_TYPE", "")
     target_environment: str = os.getenv("TARGET_ENVIRONMENT", "")

@@ -5,7 +5,14 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from ui_automation.api import create_app
-from ui_automation.config import Settings
+from ui_automation.config import Settings, _env_int
+
+
+def test_empty_or_invalid_integer_environment_values_use_defaults(monkeypatch) -> None:
+    monkeypatch.setenv("TIMEOUT_MS", "")
+    assert _env_int("TIMEOUT_MS", 10000) == 10000
+    monkeypatch.setenv("TIMEOUT_MS", "not-a-number")
+    assert _env_int("TIMEOUT_MS", 10000) == 10000
 
 
 def test_api_health_and_story_target_round_trip(tmp_path: Path) -> None:

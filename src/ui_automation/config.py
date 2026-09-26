@@ -10,6 +10,14 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 load_dotenv(ROOT_DIR / ".env")
 
 
+def _env_int(name: str, default: int) -> int:
+    value = os.getenv(name, "").strip()
+    try:
+        return int(value) if value else default
+    except ValueError:
+        return default
+
+
 @dataclass(frozen=True)
 class Settings:
     database_path: Path = ROOT_DIR / "data" / "automation.db"
@@ -34,7 +42,7 @@ class Settings:
     headless: bool = os.getenv("HEADLESS", "").lower() == "true"
     browser_configured: bool = bool(os.getenv("BROWSER"))
     mode_configured: bool = bool(os.getenv("HEADLESS"))
-    timeout_ms: int = int(os.getenv("TIMEOUT_MS", "10000"))
+    timeout_ms: int = _env_int("TIMEOUT_MS", 10000)
     screenshot_on_pass: bool = os.getenv("SCREENSHOT_ON_PASS", "true").lower() == "true"
     screenshot_on_failure: bool = os.getenv("SCREENSHOT_ON_FAILURE", "true").lower() == "true"
 

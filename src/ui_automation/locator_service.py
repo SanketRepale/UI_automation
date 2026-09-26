@@ -4,10 +4,15 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 
-from playwright.sync_api import Error as PlaywrightError
-from playwright.sync_api import sync_playwright
-
 from ui_automation.config import Settings
+
+# Playwright is imported lazily inside methods that need it,
+# so this module can be loaded in environments (e.g. Vercel serverless)
+# where Playwright is not installed.
+try:
+    from playwright.sync_api import Error as PlaywrightError
+except ImportError:
+    PlaywrightError = Exception  # type: ignore[misc,assignment]
 
 
 class LocatorService:
@@ -15,6 +20,7 @@ class LocatorService:
         self.settings = settings
 
     def discover(self, url: str, browser_name: str | None = None, authentication: dict[str, Any] | None = None, guidance: str = "") -> list[dict[str, Any]]:
+        from playwright.sync_api import sync_playwright
         with sync_playwright() as playwright:
             browser_choice = browser_name or self.settings.browser or "chromium"
             browser_type = getattr(playwright, browser_choice)
@@ -142,6 +148,7 @@ class LocatorService:
         page.locator("body").wait_for(state="visible")
 
     def validate(self, url: str, candidate: dict[str, str], browser_name: str | None = None) -> int:
+        from playwright.sync_api import sync_playwright
         with sync_playwright() as playwright:
             browser = getattr(playwright, browser_name or self.settings.browser).launch(headless=self.settings.headless)
             page = browser.new_page()

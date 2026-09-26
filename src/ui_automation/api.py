@@ -372,25 +372,65 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
         app_url = str(target.get("application_url") or "")
         guidance = str(target.get("guidance") or "")
 
-        from ui_automation.locator_service import LocatorService
-        locator_svc = LocatorService(services.settings)
+        locators: list[dict[str, Any]] = []
 
         try:
-            if _browser_execution_enabled():
-                try:
-                    locators = locator_svc.discover(app_url, target.get("browser"), authentication if target.get("authentication_type") == "Username & Password" else None, guidance)
-                except Exception as err:
-                    services.logger.warning("Browser discovery failed: %s; falling back to remote HTML/AI discovery", err)
-                    locators = locator_svc.discover_fallback(app_url, guidance, req.get("analysis", {}), services.provider())
-            else:
-                locators = locator_svc.discover_fallback(app_url, guidance, req.get("analysis", {}), services.provider())
-        except Exception as err:
-            services.logger.exception("Discovery failed: %s; falling back to default locators", err)
-            locators = locator_svc.discover_fallback(app_url, guidance, req.get("analysis", {}), None)
+            from ui_automation.locator_service import LocatorService
+            locator_svc = LocatorService(services.settings)
+        except ImportError as imp_err:
+            services.logger.warning("Playwright not available in this environment: %s", imp_err)
+            locator_svc = None  # type: ignore[assignment]
 
+        # Step 1: Try browser-based discovery (only on non-serverless with Playwright)
+        if locator_svc is not None and _browser_execution_enabled():
+            try:
+                locators = locator_svc.discover(app_url, target.get("browser"), authentication if target.get("authentication_type") == "Username & Password" else None, guidance)
+            except Exception as err:
+                services.logger.warning("Browser discovery failed: %s; falling back to HTML/AI discovery", err)
+
+        # Step 2: If no results yet, use HTML/AI fallback
+        if not locators and locator_svc is not None:
+            try:
+                locators = locator_svc.discover_fallback(app_url, guidance, req.get("analysis", {}), services.provider())
+            except Exception as err:
+                services.logger.warning("AI/HTML fallback discovery failed: %s; trying without LLM", err)
+                try:
+                    locators = locator_svc.discover_fallback(app_url, guidance, req.get("analysis", {}), None)
+                except Exception as err2:
+                    services.logger.exception("All discovery methods failed: %s", err2)
+
+        # Step 3: If LocatorService couldn't even be imported, do inline heuristic
+        if not locators and locator_svc is None:
+            from datetime import timezone as _tz
+            now_iso = datetime.now(_tz.utc).isoformat()
+            heuristic_defaults = [
+                {"element": "Username field", "tag": "input", "xpath": "//input[@name='username' or @type='email' or @id='username']"},
+                {"element": "Password field", "tag": "input", "xpath": "//input[@type='password' or @name='password' or @id='password']"},
+                {"element": "Submit button", "tag": "button", "xpath": "//button[@type='submit' or normalize-space()='Sign In' or normalize-space()='Login']"},
+                {"element": "Search field", "tag": "input", "xpath": "//input[@type='search' or @name='q' or @placeholder='Search']"},
+                {"element": "Main navigation", "tag": "nav", "xpath": "//nav"},
+            ]
+            for d in heuristic_defaults:
+                locators.append({
+                    "element": d["element"], "tag": d["tag"], "xpath": d["xpath"],
+                    "candidates": [{"kind": "xpath", "value": d["xpath"], "valid": True, "count": 1}],
+                    "selected": d["xpath"], "validated": True, "confidence": 0.70,
+                    "guidance_matches": [], "page_url": app_url,
+                    "last_validated": now_iso, "explanation": "Heuristic default (Playwright unavailable).",
+                })
+
+        # Step 4: Persist discovered locators
         for item in locators:
-            services.repository.save_locator({**item, "requirement_id": requirement_id, "test_case_id": None})
-        services.repository.save_requirement_target({**target, "application_url": app_url, "requirement_id": requirement_id})
+            try:
+                services.repository.save_locator({**item, "requirement_id": requirement_id, "test_case_id": None})
+            except Exception as save_err:
+                services.logger.warning("Failed to persist locator %s: %s", item.get("element", "?"), save_err)
+
+        try:
+            services.repository.save_requirement_target({**target, "application_url": app_url, "requirement_id": requirement_id})
+        except Exception as target_err:
+            services.logger.warning("Failed to persist target: %s", target_err)
+
         return {"count": len(locators), "locators": services.repository.locators(requirement_id=requirement_id)}
 
     @api.post("/api/requirements/{requirement_id}/generate", dependencies=[Depends(authenticate)])

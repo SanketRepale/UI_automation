@@ -4,6 +4,7 @@ __pycache__/
 .env
 .streamlit/secrets.toml
 web/node_modules/
+node_modules/
 web/.next/
 web/out/
 web/*.tsbuildinfo

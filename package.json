@@ -1,0 +1,14 @@
+{
+  "name": "fieldnotes-qa",
+  "private": true,
+  "version": "1.0.0",
+  "workspaces": ["web"],
+  "scripts": {
+    "build": "npm --prefix web run build"
+  },
+  "dependencies": {
+    "next": "^16.3.6",
+    "react": "19.1.1",
+    "react-dom": "19.1.1"
+  }
+}

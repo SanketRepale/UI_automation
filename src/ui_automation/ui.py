@@ -175,6 +175,11 @@ def _requirements(repository: Repository, settings: Settings, llm: LLMProvider, 
                     title = analysis.get("requirement_title") or Path(uploads[0].name).stem
                     safe_analysis = {key: value for key, value in analysis.items() if key not in {"username", "password", "credentials"}}
                     st.session_state["active_requirement"] = requirement_id
+                    if application.get("username") or application.get("password"):
+                        st.session_state.setdefault("requirement_credentials", {})[requirement_id] = {
+                            "username": application.get("username", ""),
+                            "password": application.get("password", ""),
+                        }
                     safe_analysis["application_details"] = {key: value for key, value in application.items() if key not in {"username", "password"}}
                     repository.save_requirement(requirement_id, title, analysis.get("user_story", ""), analysis.get("acceptance_criteria", []), safe_analysis, file_names)
                     settings_url = extract_application_details(settings.target_url).get("application_url") if settings.target_url else None
@@ -236,7 +241,8 @@ def _generation(repository: Repository, settings: Settings, llm: LLMProvider, lo
     if st.button("Generate test case drafts", type="primary"):
         try:
             log_event(logger, "TestCaseAgent", "test_case_generation_started", requirement_id=requirement["id"])
-            generated, mode = TestCaseAgent(settings.skills_dir, llm).generate(requirement["id"], requirement["analysis"])
+            with st.spinner("Generating reviewable positive and negative cases…"):
+                generated, mode = TestCaseAgent(settings.skills_dir, llm).generate(requirement["id"], requirement["analysis"])
             existing_cases = repository.test_cases()
             stale_drafts = [case for case in existing_cases if case.get("requirement_id") == requirement["id"] and case.get("status") == "Draft"]
             if generated:
@@ -329,7 +335,8 @@ def _test_cases(repository: Repository, settings: Settings) -> None:
     if fourth.button("Regenerate selected", key=f"regen-{selected['id']}"):
         analysis = next((item["analysis"] for item in requirements if item["id"] == selected["requirement_id"]), {"acceptance_criteria": selected.get("expected_results", [])})
         try:
-            regenerated, mode = TestCaseAgent(settings.skills_dir, _provider(settings)).generate(selected["requirement_id"], analysis)
+            with st.spinner("Regenerating the selected scenario…"):
+                regenerated, mode = TestCaseAgent(settings.skills_dir, _provider(settings)).generate(selected["requirement_id"], analysis)
             selected_negative = bool(re.search(r"negative|validation|invalid", f"{selected.get('test_type', '')} {selected.get('title', '')}", re.I))
             replacement = next((case for case in regenerated if bool(re.search(r"negative|validation|invalid", f"{case.get('test_type', '')} {case.get('title', '')}", re.I)) == selected_negative), None)
             if not replacement:
@@ -460,7 +467,8 @@ def _scripts(repository: Repository, settings: Settings, llm: LLMProvider, logge
     if st.button("Generate script", type="primary"):
         try:
             log_event(logger, "ScriptAgent", "script_generation_started", requirement_id=requirement["id"], test_case_id=case["id"], locator_count=len(locators))
-            source = PlaywrightScriptAgent(settings.skills_dir, llm).generate({**case, "target_url": target["application_url"], "browser": target["browser"], "headless": target["headless"], "authentication_type": target["authentication_type"], "username_label": target["username_label"], "password_label": target["password_label"], "submit_label": target["submit_label"]}, locators)
+            with st.spinner("Generating and validating the Playwright script…"):
+                source = PlaywrightScriptAgent(settings.skills_dir, llm).generate({**case, "target_url": target["application_url"], "browser": target["browser"], "headless": target["headless"], "authentication_type": target["authentication_type"], "username_label": target["username_label"], "password_label": target["password_label"], "submit_label": target["submit_label"]}, locators)
             st.session_state[f"script-{case['id']}"] = source
             log_event(logger, "ScriptAgent", "script_generation_completed", test_case_id=case["id"], script_line_count=len(source.splitlines()))
         except Exception as error:

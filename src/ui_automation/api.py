@@ -116,6 +116,14 @@ def _case_context(repository: Repository, case: dict[str, Any]) -> dict[str, Any
     return {**case, "target_url": target["application_url"], "browser": target["browser"], "headless": target["headless"], "authentication_type": target["authentication_type"], "username_label": target["username_label"], "password_label": target["password_label"], "submit_label": target["submit_label"]}
 
 
+def _runtime_credentials(app_settings: Settings, credentials: dict[str, Any] | None) -> dict[str, str]:
+    if credentials and credentials.get("username") and credentials.get("password"):
+        return {"username": str(credentials["username"]), "password": str(credentials["password"])}
+    if app_settings.target_username and app_settings.target_password:
+        return {"username": app_settings.target_username, "password": app_settings.target_password}
+    return {}
+
+
 def create_app(app_settings: Settings = settings) -> FastAPI:
     services = AppServices(app_settings)
     api = FastAPI(title="Fieldnotes QA API", version="1.0.0", docs_url="/api/docs", redoc_url=None)
@@ -218,8 +226,8 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
         if os.getenv("EXECUTION_ENABLED", "true").lower() != "true":
             raise HTTPException(status_code=503, detail="Browser discovery is disabled for this deployment")
         target = request.target.model_dump(mode="json")
-        credentials = request.credentials.model_dump() if request.credentials else None
-        authentication = {**target, **(credentials or {})} if credentials else target
+        credentials = _runtime_credentials(services.settings, request.credentials.model_dump() if request.credentials else None)
+        authentication = {**target, **credentials} if credentials else target
         locators = LocatorService(services.settings).discover(str(target["application_url"]), target["browser"], authentication if target["authentication_type"] == "Username & Password" else None, target["guidance"])
         for item in locators:
             services.repository.save_locator({**item, "requirement_id": requirement_id, "test_case_id": None})
@@ -254,8 +262,8 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
         context = _case_context(services.repository, case)
         run_id = f"RUN-{uuid.uuid4()}"
         services.repository.create_run(run_id, services.settings.target_environment or "API", context["browser"])
-        credentials = request.credentials.model_dump() if request.credentials else None
-        authentication = {**context, **(credentials or {})} if credentials else context
+        credentials = _runtime_credentials(services.settings, request.credentials.model_dump() if request.credentials else None)
+        authentication = {**context, **credentials} if credentials else context
         outcome = ExecutionService(services.settings).run_case(context, run_id, services.repository.locators(test_case_id=case_id, requirement_id=case["requirement_id"]), context["target_url"], context["browser"], authentication=authentication)
         services.repository.save_result(run_id, case_id, outcome["status"], outcome["duration"], outcome["error"], {"source": "api"}, outcome["steps"])
         services.repository.finish_run(run_id, {"status": outcome["status"], "case_id": case_id})

@@ -16,7 +16,8 @@ class LocatorService:
 
     def discover(self, url: str, browser_name: str | None = None, authentication: dict[str, Any] | None = None, guidance: str = "") -> list[dict[str, Any]]:
         with sync_playwright() as playwright:
-            browser_type = getattr(playwright, browser_name or self.settings.browser)
+            browser_choice = browser_name or self.settings.browser or "chromium"
+            browser_type = getattr(playwright, browser_choice)
             browser = browser_type.launch(headless=self.settings.headless)
             page = browser.new_page()
             page.set_default_timeout(self.settings.timeout_ms)

@@ -8,6 +8,5 @@ node_modules/
 web/.next/
 web/out/
 web/*.tsbuildinfo
-data/*.db
-data/*/
-!.gitkeep
+data/
+!data/.gitkeep

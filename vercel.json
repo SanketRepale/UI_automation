@@ -5,7 +5,8 @@
   "framework": "nextjs",
   "functions": {
     "api/**/*.py": {
-      "excludeFiles": "{tests/**,data/**,app.py,src/ui_automation/ui.py,src/ui_automation/executor.py,src/ui_automation/locator_service.py}"
+      "includeFiles": "{skills/**,src/**}",
+      "excludeFiles": "{tests/**,data/**,app.py,src/ui_automation/ui.py}"
     }
   },
   "rewrites": [

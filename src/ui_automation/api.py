@@ -13,12 +13,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from dataclasses import replace
 from fastapi import Body, Depends, FastAPI, File, HTTPException, Request, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 
-from ui_automation.agents import PlaywrightScriptAgent, RequirementAgent, TestCaseAgent
+from ui_automation.agents import PlaywrightScriptAgent, RequirementAgent, TestCaseAgent, TestCaseReviewAgent
 from ui_automation.config import Settings, settings
 from ui_automation.database import Database
 from ui_automation.documents import extract_text
@@ -86,6 +87,26 @@ class SuiteInput(BaseModel):
     name: str = Field(min_length=1, max_length=160)
     description: str = Field(default="", max_length=2000)
     case_ids: list[str] = Field(default_factory=list, max_length=500)
+
+
+class BatchExecutionInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    case_ids: list[str] = Field(min_length=1, max_length=500)
+    requirement_id: str = Field(min_length=1, max_length=120)
+    credentials: CredentialsInput | None = None
+
+
+class SettingsUpdateInput(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    llm_provider: str | None = None
+    llm_base_url: str | None = None
+    llm_model: str | None = None
+    llm_api_key: str | None = None
+    browser: str | None = None
+    headless: bool | None = None
+    timeout_ms: int | None = None
 
 
 class RequirementSummary(BaseModel):
@@ -159,7 +180,15 @@ def _browser_execution_enabled() -> bool:
 def create_app(app_settings: Settings = settings) -> FastAPI:
     services = AppServices(app_settings)
     api = FastAPI(title="Fieldnotes QA API", version="1.0.0", docs_url="/api/docs", redoc_url=None)
-    api.add_middleware(CORSMiddleware, allow_origins=_allowed_origins(os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:3001")), allow_credentials=True, allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"], allow_headers=["Authorization", "Content-Type", "X-Request-ID"])
+    allowed_origins = _allowed_origins(os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:3001,http://127.0.0.1:3000,http://127.0.0.1:3001"))
+    api.add_middleware(
+        CORSMiddleware,
+        allow_origins=allowed_origins,
+        allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$|^https://.*\.vercel\.app$",
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD"],
+        allow_headers=["*"],
+    )
 
     @api.middleware("http")
     async def request_context(request: Request, call_next: Any) -> JSONResponse:
@@ -338,6 +367,17 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
         services.repository.delete_test_case(case_id)
         return {"deleted": case_id}
 
+    @api.get("/api/cases/{case_id}/review", dependencies=[Depends(authenticate)])
+    async def review_case(case_id: str) -> dict[str, Any]:
+        case = _require_case(services.repository, case_id)
+        criteria: list[str] = []
+        if case.get("requirement_id"):
+            req = next((item for item in services.repository.requirements() if item["id"] == case["requirement_id"]), None)
+            if req:
+                criteria = req.get("acceptance_criteria", [])
+        issues = TestCaseReviewAgent(services.settings.skills_dir, services.provider()).review(case, criteria)
+        return {"case_id": case_id, "issues": issues, "passed": len(issues) == 0}
+
     @api.get("/api/cases/{case_id}/script", dependencies=[Depends(authenticate)])
     async def get_script(case_id: str) -> dict[str, Any]:
         _require_case(services.repository, case_id)
@@ -373,7 +413,7 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
 
         case = _require_case(services.repository, case_id)
         context = _case_context(services.repository, case)
-        run_id = f"RUN-{uuid.uuid4()}"
+        run_id = f"RUN-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
         services.repository.create_run(run_id, services.settings.target_environment or "API", context["browser"])
         credentials = _runtime_credentials(services.settings, request.credentials.model_dump() if request.credentials else None)
         authentication = {**context, **credentials} if credentials else context
@@ -381,6 +421,42 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
         services.repository.save_result(run_id, case_id, outcome["status"], outcome["duration"], outcome["error"], {"source": "api"}, outcome["steps"])
         services.repository.finish_run(run_id, {"status": outcome["status"], "case_id": case_id})
         return {"run_id": run_id, "outcome": outcome}
+
+    @api.post("/api/execution/batch", dependencies=[Depends(authenticate)])
+    async def execute_batch(request: BatchExecutionInput) -> dict[str, Any]:
+        if not _browser_execution_enabled():
+            raise HTTPException(status_code=503, detail="Test execution requires a configured browser worker. It is disabled on this serverless deployment.")
+        from collections import Counter
+        from ui_automation.executor import ExecutionService
+
+        req = _require_requirement(services.repository, request.requirement_id)
+        target = services.repository.requirement_target(request.requirement_id)
+        if not target:
+            raise HTTPException(status_code=409, detail="Configure a target environment for this story first")
+
+        run_id = f"RUN-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+        target_url = target["application_url"]
+        browser_name = target.get("browser") or "chromium"
+        services.repository.create_run(run_id, target_url, browser_name)
+
+        credentials = _runtime_credentials(services.settings, request.credentials.model_dump() if request.credentials else None)
+        runtime_authentication = {**target, **credentials} if credentials else target
+
+        run_settings = services.settings
+        outcomes = []
+        for case_id in request.case_ids:
+            case = _require_case(services.repository, case_id)
+            context = {**case, "target_url": target_url, "browser": browser_name, "headless": target.get("headless", True), "authentication_type": target.get("authentication_type", "No Authentication"), "username_label": target.get("username_label", ""), "password_label": target.get("password_label", ""), "submit_label": target.get("submit_label", "")}
+            locators = services.repository.locators(case_id, request.requirement_id)
+            outcome = ExecutionService(run_settings).run_case(context, run_id, locators, target_url, browser_name, authentication=runtime_authentication)
+            services.repository.save_result(run_id, case_id, outcome["status"], outcome["duration"], outcome["error"], {"source": "api_batch"}, outcome["steps"])
+            outcomes.append(outcome)
+
+        summary = dict(Counter(item["status"] for item in outcomes))
+        summary["total"] = len(outcomes)
+        summary["duration"] = round(sum(item["duration"] for item in outcomes), 3)
+        services.repository.finish_run(run_id, summary)
+        return {"run_id": run_id, "summary": summary, "outcomes": outcomes}
 
     @api.get("/api/runs", dependencies=[Depends(authenticate)])
     async def runs() -> list[dict[str, Any]]:
@@ -522,9 +598,52 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
                             archive.write(evidence, f"evidence/{relative.as_posix()}")
         return Response(content=archive_buffer.getvalue(), media_type="application/zip", headers={"Content-Disposition": f'attachment; filename="{run_id}-evidence.zip"'})
 
+    @api.get("/api/evidence/{run_id}/{case_id}/{filename}", dependencies=[Depends(authenticate)])
+    async def get_evidence_file(run_id: str, case_id: str, filename: str) -> FileResponse:
+        clean_run = re.sub(r"[^A-Za-z0-9_-]", "", run_id)
+        clean_case = re.sub(r"[^A-Za-z0-9_-]", "", case_id)
+        clean_name = re.sub(r"[^A-Za-z0-9_.-]", "", filename)
+        file_path = (services.settings.evidence_dir / clean_run / clean_case / clean_name).resolve()
+        if not file_path.is_file():
+            raise HTTPException(status_code=404, detail="Evidence screenshot file not found")
+        return FileResponse(file_path, media_type="image/png" if clean_name.lower().endswith(".png") else "application/octet-stream")
+
     @api.get("/api/settings", dependencies=[Depends(authenticate)])
     async def get_settings() -> dict[str, Any]:
-        return {"llm_provider": services.settings.llm_provider, "llm_configured": bool(services.settings.llm_model and services.settings.llm_api_key), "browser": services.settings.browser or "not configured", "timeout_ms": services.settings.timeout_ms, "execution_enabled": _browser_execution_enabled(), "storage": "ephemeral /tmp" if os.getenv("VERCEL", "").lower() == "1" else "local SQLite"}
+        return {
+            "llm_provider": services.settings.llm_provider,
+            "llm_base_url": services.settings.llm_base_url,
+            "llm_model": services.settings.llm_model,
+            "llm_configured": bool(services.settings.llm_model and services.settings.llm_api_key),
+            "browser": services.settings.browser or "chromium",
+            "headless": services.settings.headless,
+            "timeout_ms": services.settings.timeout_ms,
+            "execution_enabled": _browser_execution_enabled(),
+            "storage": "ephemeral /tmp" if os.getenv("VERCEL", "").lower() == "1" else "local SQLite",
+            "database_path": str(services.settings.database_path),
+            "evidence_dir": str(services.settings.evidence_dir),
+        }
+
+    @api.post("/api/settings", dependencies=[Depends(authenticate)])
+    async def update_settings(update: SettingsUpdateInput) -> dict[str, Any]:
+        current = services.settings
+        new_kwargs: dict[str, Any] = {}
+        if update.llm_provider is not None:
+            new_kwargs["llm_provider"] = update.llm_provider
+        if update.llm_base_url is not None:
+            new_kwargs["llm_base_url"] = update.llm_base_url
+        if update.llm_model is not None:
+            new_kwargs["llm_model"] = update.llm_model
+        if update.llm_api_key is not None:
+            new_kwargs["llm_api_key"] = update.llm_api_key
+        if update.browser is not None:
+            new_kwargs["browser"] = update.browser
+        if update.headless is not None:
+            new_kwargs["headless"] = update.headless
+        if update.timeout_ms is not None:
+            new_kwargs["timeout_ms"] = update.timeout_ms
+        services.settings = replace(current, **new_kwargs)
+        return await get_settings()
 
     @api.get("/api/runs/{run_id}", dependencies=[Depends(authenticate)])
     async def run(run_id: str) -> dict[str, Any]:

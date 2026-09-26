@@ -35,8 +35,9 @@ class ExecutionService:
         self._log("test_case_started", run_id, case["id"], browser=browser_name or self.settings.browser, target_url=self._safe_url(target_url))
         try:
             with sync_playwright() as playwright:
-                self._log("browser_launch_started", run_id, case["id"], browser=browser_name or self.settings.browser, headless=self.settings.headless)
-                browser = getattr(playwright, browser_name or self.settings.browser).launch(headless=self.settings.headless)
+                self._log("browser_launch_started", run_id, case["id"], browser=browser_name or self.settings.browser or "chromium", headless=self.settings.headless)
+                browser_choice = browser_name or self.settings.browser or "chromium"
+                browser = getattr(playwright, browser_choice).launch(headless=self.settings.headless)
                 page = browser.new_page()
                 page.set_default_timeout(self.settings.timeout_ms)
                 page.goto(target_url, wait_until="domcontentloaded")

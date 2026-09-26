@@ -1,33 +1,210 @@
 "use client";
 
 import "./workbench.css";
-import { ChangeEvent, FormEvent, useEffect, useState } from "react";
+import React, { ChangeEvent, FormEvent, useEffect, useState } from "react";
 
-type Step = { number?: number; action: string; test_data?: string; expected_result?: string; locator_requirement?: string; assertion?: Record<string, unknown> };
-type TestCase = { id: string; requirement_id: string; title: string; test_type: string; priority: string; status: string; steps: Step[]; expected_results?: string[]; [key: string]: unknown };
-type Target = { application_url: string; authentication_type: string; browser: string; headless: boolean; username_label: string; password_label: string; submit_label: string; guidance: string };
-type Requirement = { id: string; title: string; user_story: string; acceptance_criteria: string[]; source_files: string[]; analysis: Record<string, unknown>; target?: Target | null; cases: TestCase[]; locators: Locator[] };
-type Locator = { id?: string; element: string; tag: string; xpath: string; validated: boolean; confidence: number; candidates: Array<{ kind: string; value: string; valid: boolean }> };
-type Run = { id: string; started_at: string; status: string; browser: string; environment: string; summary: Record<string, number> };
-type Suite = { id: string; name: string; description: string; case_count: number; case_ids: string[] };
-type SettingsView = { llm_provider: string; llm_configured: boolean; browser: string; timeout_ms: number; execution_enabled: boolean; storage: string };
-type Report = { runs: Run[]; results: Array<Record<string, unknown>>; counts: Record<string, number>; pass_rate: number };
-type RuntimeCredentials = { username: string; password: string };
+// Types
+type Step = {
+  number?: number;
+  step_number?: number;
+  action: string;
+  test_data?: string;
+  expected?: string;
+  expected_result?: string;
+  actual?: string;
+  status?: string;
+  duration?: number;
+  locator?: string;
+  locator_requirement?: string;
+  error?: string;
+  screenshot_path?: string;
+  before_screenshot_path?: string;
+  page_url?: string;
+  page_title?: string;
+};
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "";
-const sections = ["Overview", "Requirements", "Test case generation", "Test cases", "Find elements", "Script generation", "Test execution", "Execution history", "Reporting", "Suites", "Settings"];
-const emptyTarget = (url = ""): Target => ({ application_url: url, authentication_type: "No Authentication", browser: "chromium", headless: true, username_label: "", password_label: "", submit_label: "", guidance: "" });
+type TestCase = {
+  id: string;
+  requirement_id: string;
+  title: string;
+  test_type: string;
+  priority: string;
+  status: string;
+  steps: Step[];
+  preconditions?: string[];
+  test_data?: string | Record<string, unknown>;
+  expected_results?: string[];
+  generation_note?: string;
+  [key: string]: unknown;
+};
+
+type Target = {
+  requirement_id?: string;
+  application_url: string;
+  authentication_type: string;
+  browser: string;
+  headless: boolean;
+  username_label: string;
+  password_label: string;
+  submit_label: string;
+  guidance: string;
+};
+
+type LocatorCandidate = {
+  kind: string;
+  value: string;
+  valid: boolean;
+  count?: number;
+  reason?: string;
+};
+
+type Locator = {
+  id?: string;
+  element: string;
+  tag: string;
+  xpath: string;
+  validated: boolean;
+  confidence: number;
+  candidates: LocatorCandidate[];
+  guidance_matches?: string[];
+  explanation?: string;
+  page_url?: string;
+};
+
+type Run = {
+  id: string;
+  started_at: string;
+  finished_at?: string;
+  status: string;
+  browser: string;
+  environment: string;
+  summary: Record<string, number>;
+};
+
+type TestResult = {
+  id?: string;
+  run_id: string;
+  test_case_id: string;
+  title?: string;
+  requirement_id?: string;
+  priority?: string;
+  test_type?: string;
+  status: string;
+  duration: number;
+  error?: string;
+  browser?: string;
+  run_started_at?: string;
+  steps?: Step[];
+  details?: Record<string, unknown>;
+};
+
+type Suite = {
+  id: string;
+  name: string;
+  description: string;
+  case_count: number;
+  case_ids: string[];
+};
+
+type SettingsView = {
+  llm_provider: string;
+  llm_base_url?: string;
+  llm_model?: string;
+  llm_configured: boolean;
+  browser: string;
+  headless?: boolean;
+  timeout_ms: number;
+  execution_enabled: boolean;
+  storage: string;
+  database_path?: string;
+  evidence_dir?: string;
+};
+
+type Report = {
+  runs: Run[];
+  results: TestResult[];
+  counts: Record<string, number>;
+  pass_rate: number;
+};
+
+type RuntimeCredentials = {
+  username: string;
+  password: string;
+};
+
+type Requirement = {
+  id: string;
+  title: string;
+  user_story: string;
+  acceptance_criteria: string[];
+  source_files: string[];
+  analysis: Record<string, unknown>;
+  target?: Target | null;
+  cases?: TestCase[];
+  locators?: Locator[];
+};
+
+const API_BASE = (process.env.NEXT_PUBLIC_API_BASE_URL ?? "").replace(/\/$/, "");
+
+const SECTIONS = [
+  "Overview",
+  "Requirements",
+  "Test case generation",
+  "Test cases",
+  "Find elements",
+  "Script generation",
+  "Test execution",
+  "Execution history",
+  "Reporting",
+  "Suites",
+  "Settings",
+];
+
+const emptyTarget = (url = ""): Target => ({
+  application_url: url,
+  authentication_type: "No Authentication",
+  browser: "chromium",
+  headless: true,
+  username_label: "",
+  password_label: "",
+  submit_label: "",
+  guidance: "",
+});
 
 async function api<T>(path: string, options?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, { ...options, headers: { ...(options?.body instanceof FormData ? {} : options?.body ? { "Content-Type": "application/json" } : {}), ...options?.headers }, cache: "no-store" });
+  const url = `${API_BASE}${path}`;
+  const response = await fetch(url, {
+    ...options,
+    headers: {
+      ...(options?.body instanceof FormData
+        ? {}
+        : options?.body
+        ? { "Content-Type": "application/json" }
+        : {}),
+      ...options?.headers,
+    },
+    cache: "no-store",
+  });
   const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(typeof payload.detail === "string" ? payload.detail : "The request could not be completed.");
+  if (!response.ok) {
+    throw new Error(
+      typeof payload.detail === "string"
+        ? payload.detail
+        : `Request to ${path} failed with status ${response.status}`
+    );
+  }
   return payload as T;
 }
 
 export default function Workbench() {
   const [section, setSection] = useState("Overview");
-  const [dashboard, setDashboard] = useState({ requirements: 0, test_cases: 0, results: 0, status_counts: {} as Record<string, number> });
+  const [dashboard, setDashboard] = useState({
+    requirements: 0,
+    test_cases: 0,
+    results: 0,
+    status_counts: {} as Record<string, number>,
+    recent_runs: [] as Run[],
+  });
   const [requirements, setRequirements] = useState<Requirement[]>([]);
   const [selectedId, setSelectedId] = useState("");
   const [selected, setSelected] = useState<Requirement | null>(null);
@@ -40,154 +217,2551 @@ export default function Workbench() {
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [lightboxImage, setLightboxImage] = useState<string | null>(null);
 
-  async function refresh(id = selectedId) {
-    const [summary, stories, cases, history, savedSuites, reportData, settingsData] = await Promise.all([
-      api<typeof dashboard>("/api/dashboard"), api<Requirement[]>("/api/requirements"), api<TestCase[]>("/api/cases"), api<Run[]>("/api/runs"), api<Suite[]>("/api/suites"), api<Report>("/api/report"), api<SettingsView>("/api/settings"),
-    ]);
-    setDashboard(summary); setRequirements(stories); setAllCases(cases); setRuns(history); setSuites(savedSuites); setReport(reportData); setSettings(settingsData);
-    const nextId = id || stories[0]?.id || "";
-    setSelectedId(nextId);
-    if (nextId) setSelected(await api<Requirement>(`/api/requirements/${nextId}`)); else setSelected(null);
+  async function refresh(targetId = selectedId) {
+    try {
+      const [summary, stories, cases, history, savedSuites, reportData, settingsData] =
+        await Promise.all([
+          api<typeof dashboard>("/api/dashboard"),
+          api<Requirement[]>("/api/requirements"),
+          api<TestCase[]>("/api/cases"),
+          api<Run[]>("/api/runs"),
+          api<Suite[]>("/api/suites"),
+          api<Report>("/api/report"),
+          api<SettingsView>("/api/settings"),
+        ]);
+      setDashboard(summary);
+      setRequirements(stories);
+      setAllCases(cases);
+      setRuns(history);
+      setSuites(savedSuites);
+      setReport(reportData);
+      setSettings(settingsData);
+
+      const nextId = targetId || stories[0]?.id || "";
+      setSelectedId(nextId);
+      if (nextId) {
+        const fullReq = await api<Requirement>(`/api/requirements/${nextId}`);
+        setSelected(fullReq);
+      } else {
+        setSelected(null);
+      }
+    } catch (err) {
+      setError((err as Error).message);
+    }
   }
 
-  useEffect(() => { refresh().catch((reason: Error) => setError(reason.message)); }, []);
+  useEffect(() => {
+    refresh().catch((err: Error) => setError(err.message));
+  }, []);
 
   async function act(label: string, operation: () => Promise<void>) {
-    setBusy(label); setError(""); setNotice("");
-    try { await operation(); } catch (reason) { setError((reason as Error).message); } finally { setBusy(""); }
+    setBusy(label);
+    setError("");
+    setNotice("");
+    try {
+      await operation();
+    } catch (reason) {
+      setError((reason as Error).message);
+    } finally {
+      setBusy("");
+    }
   }
 
   async function chooseStory(event: ChangeEvent<HTMLSelectElement>) {
-    const id = event.target.value; setSelectedId(id); setError("");
-    try { setSelected(await api<Requirement>(`/api/requirements/${id}`)); } catch (reason) { setError((reason as Error).message); }
+    const id = event.target.value;
+    setSelectedId(id);
+    setError("");
+    if (!id) {
+      setSelected(null);
+      return;
+    }
+    try {
+      const fullReq = await api<Requirement>(`/api/requirements/${id}`);
+      setSelected(fullReq);
+    } catch (reason) {
+      setError((reason as Error).message);
+    }
   }
 
-  const casesForStory = allCases.filter((item) => !selectedId || item.requirement_id === selectedId);
-  const title = section === "Overview" ? "Automation workspace" : section;
+  const casesForStory = allCases.filter(
+    (item) => !selectedId || item.requirement_id === selectedId
+  );
 
-  return <main className="shell">
-    <aside className="sidebar"><div className="brand"><span className="brand-mark">FQ</span><div><strong>Fieldnotes</strong><small>QA workbench</small></div></div><nav>{sections.map((item, index) => <button key={item} className={section === item ? "active" : ""} onClick={() => setSection(item)}><span className="nav-number">{String(index + 1).padStart(2, "0")}</span>{item}</button>)}</nav><div className="sidebar-foot"><span className="status-dot" /> API online<div>{settings?.storage ?? "Checking storage..."}</div></div></aside>
-    <section className="content"><header className="topbar"><div><p className="eyebrow">Fieldnotes QA / {String(sections.indexOf(section) + 1).padStart(2, "0")}</p><h1>{title}</h1><p className="lede">Requirements, reviewed cases, scripts and execution evidence in one workspace.</p></div><div className="topbar-actions"><span className="env-pill">{settings?.execution_enabled ? "BROWSER READY" : "BROWSER WORKER REQUIRED"}</span><button className="avatar" aria-label="Refresh workspace" title="Refresh workspace" onClick={() => act("Refreshing workspace...", async () => refresh())}>FQ</button></div></header>
-      {busy && <div className="loading-banner" role="status"><span className="loader" />{busy}</div>}{error && <div className="alert error">{error}</div>}{notice && <div className="alert success">{notice}</div>}
-      <StoryPicker requirements={requirements} selectedId={selectedId} onChange={chooseStory} />
-      {section === "Overview" && <Overview dashboard={dashboard} requirements={requirements} cases={allCases} runs={runs} navigate={setSection} />}
-      {section === "Requirements" && <RequirementsView requirements={requirements} selected={selected} onUpload={(files) => act("Analyzing requirement documents...", async () => { const body = new FormData(); files.forEach((file) => body.append("files", file)); const result = await api<{ requirement: Requirement; mode: string; session_credentials?: RuntimeCredentials }>("/api/requirements/analyze", { method: "POST", body }); if (result.session_credentials) setCredentialsByStory((current) => ({ ...current, [result.requirement.id]: result.session_credentials! })); setNotice(`Requirement analyzed (${result.mode}).`); await refresh(result.requirement.id); })} onDelete={() => selected && act("Deleting requirement and linked cases...", async () => { await api(`/api/requirements/${selected.id}`, { method: "DELETE" }); setCredentialsByStory((current) => { const next = { ...current }; delete next[selected.id]; return next; }); setNotice("Requirement and its dependent cases deleted."); await refresh(""); })} />}
-      {section === "Test case generation" && <GenerationView selected={selected} onGenerate={() => selected && act("Generating positive and negative case drafts...", async () => { const result = await api<{ mode: string }>(`/api/requirements/${selected.id}/generate`, { method: "POST" }); setNotice(`Cases generated (${result.mode}).`); await refresh(selected.id); })} />}
-      {section === "Test cases" && <CasesView cases={casesForStory} onUpdate={(item) => act("Saving test case...", async () => { await api(`/api/cases/${item.id}`, { method: "PUT", body: JSON.stringify(item) }); setNotice("Case saved."); await refresh(selectedId); })} onDelete={(id) => act("Deleting test case...", async () => { await api(`/api/cases/${id}`, { method: "DELETE" }); setNotice("Case deleted."); await refresh(selectedId); })} onRegenerate={(id) => act("Regenerating selected scenario...", async () => { await api(`/api/cases/${id}/regenerate`, { method: "POST" }); setNotice("Case regenerated; review approval was reset."); await refresh(selectedId); })} />}
-      {section === "Find elements" && <ElementsView selected={selected} settings={settings} credentials={credentialsByStory[selectedId] ?? { username: "", password: "" }} onCredentialsChange={(credentials) => setCredentialsByStory((current) => ({ ...current, [selectedId]: credentials }))} onSaveTarget={(target) => selected && act("Saving target configuration...", async () => { await api(`/api/requirements/${selected.id}/target`, { method: "PUT", body: JSON.stringify(target) }); setNotice("Target settings saved for this story."); await refresh(selected.id); })} onDiscover={(target, credentials) => selected && act("Inspecting the target page and validating controls...", async () => { const result = await api<{ count: number }>(`/api/requirements/${selected.id}/discover`, { method: "POST", body: JSON.stringify({ target, credentials }) }); if (credentials) setCredentialsByStory((current) => ({ ...current, [selected.id]: credentials })); setNotice(`Found ${result.count} controls.`); await refresh(selected.id); })} />}
-      {section === "Script generation" && <ScriptsView cases={casesForStory} selected={selected} onMessage={setNotice} run={act} />}
-      {section === "Test execution" && <ExecutionView cases={casesForStory} selected={selected} settings={settings} credentials={credentialsByStory[selectedId] ?? { username: "", password: "" }} onCredentialsChange={(credentials) => setCredentialsByStory((current) => ({ ...current, [selectedId]: credentials }))} onExecute={(item, credentials) => act(`Executing ${item.id}...`, async () => { await api(`/api/cases/${item.id}/execute`, { method: "POST", body: JSON.stringify({ case_id: item.id, credentials }) }); setNotice(`${item.id} finished; see execution history for evidence.`); await refresh(selectedId); })} />}
-      {section === "Execution history" && <HistoryView runs={runs} />}
-      {section === "Reporting" && <ReportingView report={report} runs={runs} />}
-      {section === "Suites" && <SuitesView suites={suites} cases={allCases} onSave={(suite) => act("Saving test suite...", async () => { await api("/api/suites", { method: "POST", body: JSON.stringify(suite) }); setNotice("Suite created."); await refresh(selectedId); })} onDelete={(id) => act("Deleting suite...", async () => { await api(`/api/suites/${id}`, { method: "DELETE" }); setNotice("Suite deleted."); await refresh(selectedId); })} />}
-      {section === "Settings" && <SettingsView settings={settings} />}
-      <footer><span>Fieldnotes QA / API v1.0</span><span>Streamlit remains available locally for functional validation.</span></footer>
-    </section>
-  </main>;
+  return (
+    <main className="shell">
+      {/* Sidebar Navigation */}
+      <aside className="sidebar">
+        <div className="brand">
+          <span className="brand-mark">FQ</span>
+          <div className="brand-info">
+            <strong>Fieldnotes QA</strong>
+            <small>Automation Workbench</small>
+          </div>
+        </div>
+
+        <nav>
+          {SECTIONS.map((item, index) => (
+            <button
+              key={item}
+              className={`nav-item ${section === item ? "active" : ""}`}
+              onClick={() => {
+                setSection(item);
+                setError("");
+                setNotice("");
+              }}
+            >
+              <span className="nav-num">{String(index + 1).padStart(2, "0")}</span>
+              <span>{item}</span>
+            </button>
+          ))}
+        </nav>
+
+        <div className="sidebar-foot">
+          <div style={{ marginBottom: 6 }}>
+            <span
+              className={`status-pill ${
+                settings?.execution_enabled ? "" : "warning"
+              }`}
+            >
+              <span className="status-dot" />
+              {settings?.execution_enabled ? "Worker Ready" : "Serverless / Ephemeral"}
+            </span>
+          </div>
+          <div>Storage: {settings?.storage ?? "Checking..."}</div>
+        </div>
+      </aside>
+
+      {/* Main Content View */}
+      <section className="content">
+        <header className="topbar">
+          <div>
+            <p className="eyebrow">
+              Fieldnotes QA / {String(SECTIONS.indexOf(section) + 1).padStart(2, "0")}
+            </p>
+            <h1>{section === "Overview" ? "Automation Workspace" : section}</h1>
+            <p className="lede">
+              Move seamlessly from requirements to reviewed cases, locators, scripts, and verified execution evidence.
+            </p>
+          </div>
+          <div className="topbar-actions">
+            <span
+              className={`worker-badge ${
+                settings?.execution_enabled ? "" : "disabled"
+              }`}
+            >
+              {settings?.execution_enabled ? "BROWSER ENGINE READY" : "BROWSER WORKER REQUIRED"}
+            </span>
+            <button
+              className="btn-icon"
+              title="Refresh all workspace data"
+              onClick={() => act("Refreshing workspace data...", async () => refresh())}
+            >
+              ↺ Refresh
+            </button>
+          </div>
+        </header>
+
+        {/* Global Story Picker */}
+        <div className="story-bar">
+          <label htmlFor="global-story-select">Active Story:</label>
+          <select
+            id="global-story-select"
+            value={selectedId}
+            onChange={chooseStory}
+          >
+            <option value="">All Requirements / No Filter</option>
+            {requirements.map((req) => (
+              <option key={req.id} value={req.id}>
+                {req.id} · {req.title}
+              </option>
+            ))}
+          </select>
+          <span className="story-meta">
+            {requirements.length} stories · {casesForStory.length} cases
+          </span>
+        </div>
+
+        {/* Global Notifications */}
+        {busy && (
+          <div className="banner loading">
+            <span className="spinner" />
+            <span>{busy}</span>
+          </div>
+        )}
+        {error && <div className="banner error">{error}</div>}
+        {notice && <div className="banner success">{notice}</div>}
+
+        {/* Sub-Views */}
+        {section === "Overview" && (
+          <OverviewView
+            dashboard={dashboard}
+            requirements={requirements}
+            cases={allCases}
+            runs={runs}
+            settings={settings}
+            navigate={setSection}
+          />
+        )}
+
+        {section === "Requirements" && (
+          <RequirementsView
+            requirements={requirements}
+            selected={selected}
+            onUpload={(files) =>
+              act("Uploading and analyzing requirement documents...", async () => {
+                const body = new FormData();
+                files.forEach((file) => body.append("files", file));
+                const result = await api<{
+                  requirement: Requirement;
+                  mode: string;
+                  session_credentials?: RuntimeCredentials;
+                }>("/api/requirements/analyze", { method: "POST", body });
+                if (result.session_credentials) {
+                  setCredentialsByStory((current) => ({
+                    ...current,
+                    [result.requirement.id]: result.session_credentials!,
+                  }));
+                }
+                setNotice(`Requirement successfully analyzed (${result.mode}).`);
+                await refresh(result.requirement.id);
+              })
+            }
+            onDelete={() =>
+              selected &&
+              act("Deleting requirement and all linked artifacts...", async () => {
+                await api(`/api/requirements/${selected.id}`, { method: "DELETE" });
+                setCredentialsByStory((current) => {
+                  const copy = { ...current };
+                  delete copy[selected.id];
+                  return copy;
+                });
+                setNotice(`Deleted requirement ${selected.id}.`);
+                await refresh("");
+              })
+            }
+          />
+        )}
+
+        {section === "Test case generation" && (
+          <GenerationView
+            selected={selected}
+            casesForStory={casesForStory}
+            onGenerate={() =>
+              selected &&
+              act("Generating positive, negative and boundary drafts...", async () => {
+                const result = await api<{ mode: string; cases: TestCase[] }>(
+                  `/api/requirements/${selected.id}/generate`,
+                  { method: "POST" }
+                );
+                setNotice(`Draft cases generated (${result.mode}).`);
+                await refresh(selected.id);
+              })
+            }
+          />
+        )}
+
+        {section === "Test cases" && (
+          <TestCasesView
+            cases={casesForStory}
+            requirements={requirements}
+            selectedStoryId={selectedId}
+            onUpdate={(item) =>
+              act(`Saving test case ${item.id}...`, async () => {
+                await api(`/api/cases/${item.id}`, {
+                  method: "PUT",
+                  body: JSON.stringify(item),
+                });
+                setNotice(`Case ${item.id} saved.`);
+                await refresh(selectedId);
+              })
+            }
+            onDelete={(id) =>
+              act(`Deleting test case ${id}...`, async () => {
+                await api(`/api/cases/${id}`, { method: "DELETE" });
+                setNotice(`Case ${id} deleted.`);
+                await refresh(selectedId);
+              })
+            }
+            onRegenerate={(id) =>
+              act(`Regenerating test case ${id}...`, async () => {
+                const res = await api<{ mode: string }>(`/api/cases/${id}/regenerate`, {
+                  method: "POST",
+                });
+                setNotice(`Case ${id} regenerated (${res.mode}); approval reset to Draft.`);
+                await refresh(selectedId);
+              })
+            }
+          />
+        )}
+
+        {section === "Find elements" && (
+          <ElementsView
+            selected={selected}
+            settings={settings}
+            credentials={credentialsByStory[selectedId] ?? { username: "", password: "" }}
+            onCredentialsChange={(creds) =>
+              setCredentialsByStory((current) => ({ ...current, [selectedId]: creds }))
+            }
+            onSaveTarget={(target) =>
+              selected &&
+              act("Saving target settings...", async () => {
+                await api(`/api/requirements/${selected.id}/target`, {
+                  method: "PUT",
+                  body: JSON.stringify(target),
+                });
+                setNotice("Target settings saved for this story.");
+                await refresh(selected.id);
+              })
+            }
+            onDiscover={(target, creds) =>
+              selected &&
+              act("Inspecting live DOM and discovering shared locators...", async () => {
+                const result = await api<{ count: number }>(
+                  `/api/requirements/${selected.id}/discover`,
+                  { method: "POST", body: JSON.stringify({ target, credentials: creds }) }
+                );
+                if (creds) {
+                  setCredentialsByStory((current) => ({
+                    ...current,
+                    [selected.id]: creds,
+                  }));
+                }
+                setNotice(`Discovered and validated ${result.count} shared elements.`);
+                await refresh(selected.id);
+              })
+            }
+          />
+        )}
+
+        {section === "Script generation" && (
+          <ScriptsView
+            cases={casesForStory}
+            selected={selected}
+            run={act}
+            onMessage={setNotice}
+          />
+        )}
+
+        {section === "Test execution" && (
+          <ExecutionView
+            cases={casesForStory}
+            selected={selected}
+            settings={settings}
+            credentials={credentialsByStory[selectedId] ?? { username: "", password: "" }}
+            onCredentialsChange={(creds) =>
+              setCredentialsByStory((current) => ({ ...current, [selectedId]: creds }))
+            }
+            onExecuteBatch={async (caseIds, creds) => {
+              if (!selected) return;
+              await act(`Executing ${caseIds.length} approved test cases in browser...`, async () => {
+                const res = await api<{ run_id: string; summary: Record<string, number>; outcomes: Step[] }>(
+                  "/api/execution/batch",
+                  {
+                    method: "POST",
+                    body: JSON.stringify({
+                      case_ids: caseIds,
+                      requirement_id: selected.id,
+                      credentials: creds,
+                    }),
+                  }
+                );
+                setNotice(
+                  `Batch execution completed (Run ${res.run_id}). Passed: ${
+                    res.summary.PASS ?? 0
+                  }, Failed: ${res.summary.FAIL ?? 0}.`
+                );
+                await refresh(selected.id);
+              });
+            }}
+            onPreviewImage={(src) => setLightboxImage(src)}
+          />
+        )}
+
+        {section === "Execution history" && (
+          <HistoryView
+            runs={runs}
+            onPreviewImage={(src) => setLightboxImage(src)}
+          />
+        )}
+
+        {section === "Reporting" && <ReportingView report={report} runs={runs} />}
+
+        {section === "Suites" && (
+          <SuitesView
+            suites={suites}
+            cases={allCases}
+            onSave={(suite) =>
+              act("Saving test suite...", async () => {
+                await api("/api/suites", {
+                  method: "POST",
+                  body: JSON.stringify(suite),
+                });
+                setNotice("Test suite saved.");
+                await refresh(selectedId);
+              })
+            }
+            onDelete={(id) =>
+              act("Deleting test suite...", async () => {
+                await api(`/api/suites/${id}`, { method: "DELETE" });
+                setNotice("Suite deleted.");
+                await refresh(selectedId);
+              })
+            }
+          />
+        )}
+
+        {section === "Settings" && (
+          <SettingsView
+            settings={settings}
+            onUpdateSettings={(newSettings) =>
+              act("Saving runtime settings...", async () => {
+                const updated = await api<SettingsView>("/api/settings", {
+                  method: "POST",
+                  body: JSON.stringify(newSettings),
+                });
+                setSettings(updated);
+                setNotice("Settings successfully updated.");
+              })
+            }
+          />
+        )}
+
+        {/* Full Resolution Screenshot Lightbox */}
+        {lightboxImage && (
+          <div className="modal-overlay" onClick={() => setLightboxImage(null)}>
+            <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+              <button
+                className="modal-close"
+                onClick={() => setLightboxImage(null)}
+                aria-label="Close image preview"
+              >
+                ✕
+              </button>
+              <img src={lightboxImage} alt="Test execution step evidence" />
+            </div>
+          </div>
+        )}
+
+        <footer>
+          <span>
+            Fieldnotes QA · Production Platform v1.0
+          </span>
+          <span>
+            Streamlit validation interface preserved at <code>app.py</code>
+          </span>
+        </footer>
+      </section>
+    </main>
+  );
 }
 
-function StoryPicker({ requirements, selectedId, onChange }: { requirements: Requirement[]; selectedId: string; onChange: (event: ChangeEvent<HTMLSelectElement>) => void }) {
-  return <div className="story-picker"><label htmlFor="active-story">Active story</label><select id="active-story" value={selectedId} onChange={onChange}><option value="">Select a story</option>{requirements.map((item) => <option key={item.id} value={item.id}>{item.id} / {item.title}</option>)}</select><span>{requirements.length} saved</span></div>;
+// ==========================================
+// 01 / OVERVIEW VIEW
+// ==========================================
+function OverviewView({
+  dashboard,
+  requirements,
+  cases,
+  runs,
+  settings,
+  navigate,
+}: {
+  dashboard: {
+    requirements: number;
+    test_cases: number;
+    results: number;
+    status_counts: Record<string, number>;
+  };
+  requirements: Requirement[];
+  cases: TestCase[];
+  runs: Run[];
+  settings: SettingsView | null;
+  navigate: (view: string) => void;
+}) {
+  const pass = dashboard.status_counts.PASS ?? 0;
+  const fail = dashboard.status_counts.FAIL ?? 0;
+  const blocked = dashboard.status_counts.BLOCKED ?? 0;
+  const executed = pass + fail;
+  const passRate = executed ? `${Math.round((pass / executed) * 100)}%` : "—";
+
+  return (
+    <>
+      <div className="metrics-row">
+        <div className="metric-card">
+          <span>Requirements</span>
+          <strong>{dashboard.requirements}</strong>
+          <small>{requirements.length} source stories registered</small>
+        </div>
+        <div className="metric-card">
+          <span>Test cases</span>
+          <strong>{dashboard.test_cases}</strong>
+          <small>
+            {cases.filter((c) => c.status === "Approved").length} approved ·{" "}
+            {cases.filter((c) => c.status === "Draft").length} drafts
+          </small>
+        </div>
+        <div className="metric-card">
+          <span>Executed results</span>
+          <strong>{dashboard.results}</strong>
+          <small>{runs.length} browser runs recorded</small>
+        </div>
+        <div className="metric-card">
+          <span>Pass rate</span>
+          <strong style={{ color: pass >= fail ? "#34d399" : "#fb7185" }}>
+            {passRate}
+          </strong>
+          <small>
+            {pass} passed · {fail} failed {blocked ? `· ${blocked} blocked` : ""}
+          </small>
+        </div>
+      </div>
+
+      <div className="workflow-stepper">
+        {[
+          {
+            num: "01",
+            title: "Requirements",
+            desc: "Upload and analyze source specifications & business rules.",
+            target: "Requirements",
+          },
+          {
+            num: "02",
+            title: "Find Elements",
+            desc: "Discover and validate live DOM locators for the story.",
+            target: "Find elements",
+          },
+          {
+            num: "03",
+            title: "Review & Scripts",
+            desc: "Inspect traceability, approve cases, and generate scripts.",
+            target: "Test cases",
+          },
+          {
+            num: "04",
+            title: "Execute & Report",
+            desc: "Run isolated cases in Playwright and verify visual evidence.",
+            target: "Test execution",
+          },
+        ].map((item) => (
+          <div
+            key={item.num}
+            className="stepper-card"
+            onClick={() => navigate(item.target)}
+          >
+            <div className="stepper-num">{item.num}</div>
+            <div className="stepper-title">{item.title}</div>
+            <div className="stepper-desc">{item.desc}</div>
+          </div>
+        ))}
+      </div>
+
+      <div className="panel">
+        <div className="panel-header">
+          <h2>Recent Execution Activity</h2>
+          <button className="btn-secondary" onClick={() => navigate("Execution history")}>
+            View All Runs →
+          </button>
+        </div>
+        {runs.length > 0 ? (
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Run ID</th>
+                  <th>Started</th>
+                  <th>Status</th>
+                  <th>Browser</th>
+                  <th>Outcome Summary</th>
+                </tr>
+              </thead>
+              <tbody>
+                {runs.slice(0, 6).map((run) => (
+                  <tr key={run.id}>
+                    <td>
+                      <code>{run.id}</code>
+                    </td>
+                    <td>{new Date(run.started_at).toLocaleString()}</td>
+                    <td>
+                      <span
+                        className={`badge ${
+                          run.status === "COMPLETED" ? "badge-pass" : "badge-blocked"
+                        }`}
+                      >
+                        {run.status}
+                      </span>
+                    </td>
+                    <td>{run.browser}</td>
+                    <td>
+                      {Object.entries(run.summary || {})
+                        .map(([k, v]) => `${k}: ${v}`)
+                        .join(" · ") || "In progress"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p style={{ color: "var(--text-muted)", fontSize: "0.84rem" }}>
+            No execution runs recorded yet. Execute approved cases to populate outcomes.
+          </p>
+        )}
+      </div>
+
+      <div className="panel">
+        <div className="panel-header">
+          <h2>System Readiness & Configuration</h2>
+        </div>
+        <div className="grid-3">
+          <div className="metric-card" style={{ padding: 14 }}>
+            <span>LLM Provider</span>
+            <strong style={{ fontSize: "1.2rem", margin: "6px 0" }}>
+              {settings?.llm_provider || "offline"}
+            </strong>
+            <small>
+              {settings?.llm_configured
+                ? "API Credentials Configured"
+                : "Offline Heuristic Draft Mode"}
+            </small>
+          </div>
+          <div className="metric-card" style={{ padding: 14 }}>
+            <span>Browser Worker</span>
+            <strong style={{ fontSize: "1.2rem", margin: "6px 0" }}>
+              {settings?.browser || "chromium"}
+            </strong>
+            <small>
+              {settings?.execution_enabled
+                ? "Playwright Execution Enabled"
+                : "Worker Required on Serverless"}
+            </small>
+          </div>
+          <div className="metric-card" style={{ padding: 14 }}>
+            <span>Database & Storage</span>
+            <strong style={{ fontSize: "1.2rem", margin: "6px 0" }}>
+              {settings?.storage || "SQLite"}
+            </strong>
+            <small>{settings?.database_path || "data/automation.db"}</small>
+          </div>
+        </div>
+      </div>
+    </>
+  );
 }
 
-function Overview({ dashboard, requirements, cases, runs, navigate }: { dashboard: { requirements: number; test_cases: number; results: number; status_counts: Record<string, number> }; requirements: Requirement[]; cases: TestCase[]; runs: Run[]; navigate: (value: string) => void }) {
-  const pass = dashboard.status_counts.PASS ?? 0; const fail = dashboard.status_counts.FAIL ?? 0;
-  return <><div className="metrics"><Metric label="Requirements" value={dashboard.requirements} detail="source stories" /><Metric label="Test cases" value={dashboard.test_cases} detail="draft and approved" /><Metric label="Executed" value={dashboard.results} detail="persisted outcomes" /><Metric label="Pass rate" value={pass + fail ? `${Math.round(pass / (pass + fail) * 100)}%` : "--"} detail={`${pass} passed / ${fail} failed`} /></div><div className="work-grid"><section className="panel"><Heading kicker="Workflow" title="Move from story to evidence" /><div className="stage-list">{[["01", "Requirements", "Analyze source documents."], ["02", "Test case generation", "Create positive and negative drafts."], ["03", "Test cases", "Edit, review, approve or reject."], ["04", "Find elements", "Inspect the story's shared controls."], ["05", "Script generation", "Generate and edit Playwright scripts."], ["06", "Test execution", "Run approved cases and inspect evidence."]].map(([number, target, text]) => <button key={number} onClick={() => navigate(target)}><b>{number}</b><span><strong>{target}</strong><small>{text}</small></span><i>→</i></button>)}</div></section><section className="panel"><Heading kicker="Recent activity" title="Latest runs" /><div className="case-list">{runs.slice(0, 6).map((run) => <div className="case-row" key={run.id}><span className="case-status">{run.status}</span><div><strong>{run.id}</strong><small>{run.started_at} / {run.browser}</small></div></div>)}{!runs.length && <Empty>No execution runs yet.</Empty>}</div></section></div><section className="panel cases-panel"><Heading kicker="Workspace" title="Requirements and case health" /><div className="overview-split"><div><Metric label="Requirements" value={requirements.length} detail="stories tracked" /></div><div><Metric label="Drafts awaiting review" value={cases.filter((item) => item.status === "Draft").length} detail="human approval required" /></div><div><Metric label="Approved for execution" value={cases.filter((item) => item.status === "Approved").length} detail="ready when a worker is connected" /></div></div></section></>;
-}
-
-function RequirementsView({ requirements, selected, onUpload, onDelete }: { requirements: Requirement[]; selected: Requirement | null; onUpload: (files: File[]) => void; onDelete: () => void }) {
+// ==========================================
+// 02 / REQUIREMENTS VIEW
+// ==========================================
+function RequirementsView({
+  requirements,
+  selected,
+  onUpload,
+  onDelete,
+}: {
+  requirements: Requirement[];
+  selected: Requirement | null;
+  onUpload: (files: File[]) => void;
+  onDelete: () => void;
+}) {
   const [files, setFiles] = useState<File[]>([]);
-  const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
-  return <div className="view-grid"><section className="panel"><Heading kicker="Source intake" title="Analyze requirement documents" /><p className="muted">Upload up to ten PDF, DOCX, XLSX, CSV, TXT or Markdown files. Credentials in source documents are extracted locally and redacted from model prompts.</p><label className="dropzone"><input type="file" multiple accept=".txt,.md,.markdown,.pdf,.docx,.csv,.xlsx" onChange={(event) => setFiles(Array.from(event.target.files ?? []))} /><span className="upload-symbol">+</span><strong>{files.length ? `${files.length} file(s) selected` : "Choose requirement documents"}</strong><small>{files.map((file) => file.name).join(" · ") || "Combined upload limit: 4 MB"}</small></label><button className="primary" disabled={!files.length || files.length > 10 || totalBytes > 4 * 1024 * 1024} onClick={() => files.length > 0 && onUpload(files)}>Analyze documents</button>{totalBytes > 4 * 1024 * 1024 && <p className="upload-error">Keep the combined document size below 4 MB.</p>}</section><section className="panel"><Heading kicker="Saved stories" title={`${requirements.length} requirements`} /><div className="case-list">{requirements.map((item) => <article className={`case-row ${item.id === selected?.id ? "selected-row" : ""}`} key={item.id}><div><strong>{item.title}</strong><small>{item.id} / {item.acceptance_criteria?.length ?? 0} criteria</small></div></article>)}{!requirements.length && <Empty>Upload the first requirement to start.</Empty>}</div>{selected && <div className="detail-block"><h3>{selected.user_story || selected.title}</h3><ul>{selected.acceptance_criteria?.map((criterion, index) => <li key={index}>{criterion}</li>)}</ul><small>Source files: {selected.source_files?.join(", ") || "None"}</small><div><button className="danger-button" onClick={onDelete}>Delete requirement and dependent cases</button></div></div>}</section></div>;
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
+  function handleFileChange(e: ChangeEvent<HTMLInputElement>) {
+    if (e.target.files) {
+      setFiles(Array.from(e.target.files));
+    }
+  }
+
+  const totalBytes = files.reduce((acc, f) => acc + f.size, 0);
+
+  return (
+    <div className="grid-2">
+      <div className="panel">
+        <div className="panel-header">
+          <h2>Intake Requirement Documents</h2>
+        </div>
+        <p style={{ color: "var(--text-dim)", fontSize: "0.84rem", lineHeight: 1.5 }}>
+          Upload specifications in PDF, DOCX, XLSX, CSV, TXT, or Markdown. The requirement agent
+          extracts the story, acceptance criteria, test data rules, and credentials safely.
+        </p>
+
+        <label className="dropzone">
+          <input
+            type="file"
+            multiple
+            accept=".pdf,.docx,.xlsx,.csv,.txt,.md,.markdown"
+            onChange={handleFileChange}
+          />
+          <div className="dropzone-icon">↑</div>
+          <strong style={{ color: "#fff", fontSize: "0.9rem" }}>
+            {files.length ? `${files.length} document(s) chosen` : "Choose or drag requirement files"}
+          </strong>
+          <small style={{ color: "var(--text-muted)" }}>
+            PDF, DOCX, XLSX, CSV, TXT, MD (Max 10 files · Up to 4 MB combined)
+          </small>
+        </label>
+
+        {files.length > 0 && (
+          <div className="file-chips">
+            {files.map((f, i) => (
+              <span key={i} className="file-chip">
+                📄 {f.name} ({(f.size / 1024).toFixed(0)} KB)
+              </span>
+            ))}
+          </div>
+        )}
+
+        <button
+          className="btn-primary"
+          style={{ width: "100%", marginTop: 12 }}
+          disabled={!files.length || files.length > 10 || totalBytes > 4 * 1024 * 1024}
+          onClick={() => onUpload(files)}
+        >
+          Analyze Uploaded Documents
+        </button>
+      </div>
+
+      <div className="panel">
+        <div className="panel-header">
+          <h2>Requirement Details & Story</h2>
+          <span className="badge badge-tag">{selected?.id || "None selected"}</span>
+        </div>
+
+        {selected ? (
+          <div>
+            <div style={{ marginBottom: 16 }}>
+              <span style={{ fontSize: "0.76rem", color: "var(--text-muted)", textTransform: "uppercase" }}>
+                Title
+              </span>
+              <h3 style={{ margin: "4px 0 10px", fontSize: "1.1rem", color: "#fff" }}>
+                {selected.title}
+              </h3>
+            </div>
+
+            <div style={{ marginBottom: 16 }}>
+              <span style={{ fontSize: "0.76rem", color: "var(--text-muted)", textTransform: "uppercase" }}>
+                User Story
+              </span>
+              <p
+                style={{
+                  background: "var(--bg-base)",
+                  padding: "12px 14px",
+                  borderRadius: "var(--radius-md)",
+                  border: "1px solid var(--border-subtle)",
+                  fontSize: "0.85rem",
+                  lineHeight: 1.55,
+                  margin: "4px 0",
+                  color: "#e2e8f0",
+                }}
+              >
+                {selected.user_story || "No user story provided."}
+              </p>
+            </div>
+
+            <div style={{ marginBottom: 16 }}>
+              <span style={{ fontSize: "0.76rem", color: "var(--text-muted)", textTransform: "uppercase" }}>
+                Acceptance Criteria ({selected.acceptance_criteria?.length ?? 0})
+              </span>
+              <ul
+                style={{
+                  paddingLeft: 20,
+                  fontSize: "0.84rem",
+                  color: "#cbd5e1",
+                  lineHeight: 1.6,
+                  margin: "6px 0",
+                }}
+              >
+                {selected.acceptance_criteria?.map((item, idx) => (
+                  <li key={idx}>{item}</li>
+                ))}
+              </ul>
+            </div>
+
+            {selected.source_files?.length > 0 && (
+              <div style={{ marginBottom: 20 }}>
+                <span style={{ fontSize: "0.74rem", color: "var(--text-muted)" }}>
+                  Source Documents: {selected.source_files.join(", ")}
+                </span>
+              </div>
+            )}
+
+            <div
+              style={{
+                marginTop: 24,
+                paddingTop: 16,
+                borderTop: "1px solid var(--border-subtle)",
+                display: "flex",
+                alignItems: "center",
+                gap: 12,
+              }}
+            >
+              <label style={{ fontSize: "0.78rem", display: "flex", alignItems: "center", gap: 6 }}>
+                <input
+                  type="checkbox"
+                  checked={confirmDelete}
+                  onChange={(e) => setConfirmDelete(e.target.checked)}
+                />
+                Confirm deletion of story and dependent cases
+              </label>
+              <button
+                className="btn-danger"
+                disabled={!confirmDelete}
+                onClick={onDelete}
+              >
+                Delete Requirement
+              </button>
+            </div>
+          </div>
+        ) : (
+          <p style={{ color: "var(--text-muted)", fontSize: "0.84rem" }}>
+            Select or upload a requirement to view acceptance criteria and stories.
+          </p>
+        )}
+      </div>
+    </div>
+  );
 }
 
-function GenerationView({ selected, onGenerate }: { selected: Requirement | null; onGenerate: () => void }) {
-  return <section className="panel"><Heading kicker="Drafting" title="Generate reviewable test cases" /><p className="muted">Creates positive and negative test cases from the active story's acceptance criteria. Existing approved/rejected cases are kept; previous drafts for this story are replaced.</p>{selected ? <><div className="story-callout"><strong>{selected.title}</strong><p>{selected.user_story || "No story text supplied."}</p><ul>{selected.acceptance_criteria?.map((item, index) => <li key={index}>{item}</li>)}</ul></div><button className="primary compact" onClick={onGenerate}>Generate case drafts</button></> : <Empty>Select or create a requirement first.</Empty>}</section>;
+// ==========================================
+// 03 / TEST CASE GENERATION VIEW
+// ==========================================
+function GenerationView({
+  selected,
+  casesForStory,
+  onGenerate,
+}: {
+  selected: Requirement | null;
+  casesForStory: TestCase[];
+  onGenerate: () => void;
+}) {
+  return (
+    <div className="panel">
+      <div className="panel-header">
+        <h2>Generate Reviewable Test Cases</h2>
+        {selected && <span className="badge badge-tag">{selected.id}</span>}
+      </div>
+
+      {selected ? (
+        <>
+          <div
+            style={{
+              background: "var(--bg-base)",
+              padding: "18px",
+              borderRadius: "var(--radius-md)",
+              border: "1px solid var(--border-subtle)",
+              marginBottom: 20,
+            }}
+          >
+            <h3 style={{ margin: "0 0 8px", fontSize: "1rem", color: "#fff" }}>
+              {selected.title}
+            </h3>
+            <p style={{ margin: "0 0 12px", fontSize: "0.86rem", color: "var(--text-dim)", lineHeight: 1.5 }}>
+              {selected.user_story || "No user story text."}
+            </p>
+            <strong style={{ fontSize: "0.8rem", color: "var(--teal)" }}>
+              Acceptance Criteria to automate:
+            </strong>
+            <ul style={{ margin: "6px 0 0", paddingLeft: 18, fontSize: "0.82rem", color: "#cbd5e1" }}>
+              {selected.acceptance_criteria?.map((ac, idx) => (
+                <li key={idx}>{ac}</li>
+              ))}
+            </ul>
+          </div>
+
+          <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 24 }}>
+            <button className="btn-primary" onClick={onGenerate}>
+              ⚡ Generate Positive & Negative Case Drafts
+            </button>
+            <span style={{ fontSize: "0.78rem", color: "var(--text-muted)" }}>
+              Generates explicit actions, expected results, and synthetic positive/negative test data.
+            </span>
+          </div>
+
+          {casesForStory.length > 0 && (
+            <div>
+              <h3 style={{ fontSize: "1rem", color: "#fff", marginBottom: 12 }}>
+                Generated Cases for this Story ({casesForStory.length})
+              </h3>
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>ID</th>
+                      <th>Title</th>
+                      <th>Type</th>
+                      <th>Priority</th>
+                      <th>Status</th>
+                      <th>Steps Count</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {casesForStory.map((tc) => (
+                      <tr key={tc.id}>
+                        <td>
+                          <code>{tc.id}</code>
+                        </td>
+                        <td style={{ fontWeight: 600 }}>{tc.title}</td>
+                        <td>
+                          <span className="badge badge-tag">{tc.test_type}</span>
+                        </td>
+                        <td>{tc.priority}</td>
+                        <td>
+                          <span
+                            className={`badge ${
+                              tc.status === "Approved"
+                                ? "badge-approved"
+                                : tc.status === "Rejected"
+                                ? "badge-rejected"
+                                : "badge-draft"
+                            }`}
+                          >
+                            {tc.status}
+                          </span>
+                        </td>
+                        <td>{tc.steps?.length ?? 0} steps</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </>
+      ) : (
+        <p style={{ color: "var(--text-muted)", fontSize: "0.84rem" }}>
+          Select an active story in the top bar to generate positive and negative case drafts.
+        </p>
+      )}
+    </div>
+  );
 }
 
-function CasesView({ cases, onUpdate, onDelete, onRegenerate }: { cases: TestCase[]; onUpdate: (item: TestCase) => void; onDelete: (id: string) => void; onRegenerate: (id: string) => void }) {
-  const [query, setQuery] = useState(""); const [status, setStatus] = useState("All"); const [activeId, setActiveId] = useState("");
-  const filtered = cases.filter((item) => (!query || `${item.id} ${item.title}`.toLowerCase().includes(query.toLowerCase())) && (status === "All" || item.status === status));
-  const active = filtered.find((item) => item.id === activeId) ?? filtered[0];
-  return <div className="panel"><Heading kicker="Human review" title="Test cases" /><div className="filters"><input placeholder="Search cases" value={query} onChange={(event) => setQuery(event.target.value)} /><select value={status} onChange={(event) => setStatus(event.target.value)}>{["All", "Draft", "Approved", "Rejected"].map((value) => <option key={value}>{value}</option>)}</select><ExportButton format="json" requirementId={cases[0]?.requirement_id} statusFilter={status === "All" ? undefined : status} /><ExportButton format="xlsx" requirementId={cases[0]?.requirement_id} statusFilter={status === "All" ? undefined : status} /></div><div className="case-list">{filtered.map((item) => <button className={`case-row case-select ${active?.id === item.id ? "selected-row" : ""}`} key={item.id} onClick={() => setActiveId(item.id)}><span className={`case-status ${item.status.toLowerCase()}`}>{item.status}</span><div><strong>{item.title}</strong><small>{item.id} / {item.test_type} / {item.priority} / {item.steps?.length ?? 0} steps</small></div></button>)}{!filtered.length && <Empty>No cases match these filters.</Empty>}</div>{active && <CaseEditor key={active.id} item={active} onUpdate={onUpdate} onDelete={() => onDelete(active.id)} onRegenerate={() => onRegenerate(active.id)} />}</div>;
+// ==========================================
+// 04 / TEST CASES (HUMAN REVIEW & EDITING)
+// ==========================================
+function TestCasesView({
+  cases,
+  requirements,
+  selectedStoryId,
+  onUpdate,
+  onDelete,
+  onRegenerate,
+}: {
+  cases: TestCase[];
+  requirements: Requirement[];
+  selectedStoryId: string;
+  onUpdate: (item: TestCase) => void;
+  onDelete: (id: string) => void;
+  onRegenerate: (id: string) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState("All");
+  const [priorityFilter, setPriorityFilter] = useState("All");
+  const [typeFilter, setTypeFilter] = useState("All");
+  const [activeCaseId, setActiveCaseId] = useState("");
+  const [reviewResult, setReviewResult] = useState<{ passed: boolean; issues: string[] } | null>(null);
+  const [reviewing, setReviewing] = useState(false);
+
+  const priorities = ["All", ...Array.from(new Set(cases.map((c) => c.priority || "Medium")))];
+  const testTypes = ["All", ...Array.from(new Set(cases.map((c) => c.test_type || "Functional")))];
+
+  const filtered = cases.filter((c) => {
+    const textMatch = !query || `${c.id} ${c.title}`.toLowerCase().includes(query.toLowerCase());
+    const statusMatch = statusFilter === "All" || c.status === statusFilter;
+    const priorityMatch = priorityFilter === "All" || c.priority === priorityFilter;
+    const typeMatch = typeFilter === "All" || c.test_type === typeFilter;
+    return textMatch && statusMatch && priorityMatch && typeMatch;
+  });
+
+  const activeCase = filtered.find((c) => c.id === activeCaseId) ?? filtered[0];
+
+  // Run automated review check when active case changes
+  useEffect(() => {
+    if (activeCase) {
+      setReviewing(true);
+      api<{ passed: boolean; issues: string[] }>(`/api/cases/${activeCase.id}/review`)
+        .then((res) => setReviewResult(res))
+        .catch(() => setReviewResult(null))
+        .finally(() => setReviewing(false));
+    } else {
+      setReviewResult(null);
+    }
+  }, [activeCase?.id]);
+
+  return (
+    <div className="panel">
+      <div className="panel-header">
+        <h2>Human Review & Case Traceability</h2>
+        <span className="badge badge-tag">{filtered.length} filtered cases</span>
+      </div>
+
+      {/* Filter toolbar */}
+      <div className="filter-bar">
+        <input
+          type="text"
+          placeholder="Search by ID or Title..."
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+        <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+          <option value="All">All Statuses</option>
+          <option value="Draft">Draft</option>
+          <option value="Approved">Approved</option>
+          <option value="Rejected">Rejected</option>
+        </select>
+        <select value={priorityFilter} onChange={(e) => setPriorityFilter(e.target.value)}>
+          {priorities.map((p) => (
+            <option key={p} value={p}>
+              Priority: {p}
+            </option>
+          ))}
+        </select>
+        <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
+          {testTypes.map((t) => (
+            <option key={t} value={t}>
+              Type: {t}
+            </option>
+          ))}
+        </select>
+        <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+          <ExportCaseButton format="json" reqId={selectedStoryId} status={statusFilter} />
+          <ExportCaseButton format="csv" reqId={selectedStoryId} status={statusFilter} />
+          <ExportCaseButton format="xlsx" reqId={selectedStoryId} status={statusFilter} />
+          <ExportCaseButton format="markdown" reqId={selectedStoryId} status={statusFilter} />
+        </div>
+      </div>
+
+      <div className="grid-2">
+        {/* Cases List */}
+        <div style={{ maxHeight: "720px", overflowY: "auto" }}>
+          {filtered.map((item) => (
+            <div
+              key={item.id}
+              className={`case-item ${activeCase?.id === item.id ? "selected" : ""}`}
+              onClick={() => setActiveCaseId(item.id)}
+            >
+              <span
+                className={`badge ${
+                  item.status === "Approved"
+                    ? "badge-approved"
+                    : item.status === "Rejected"
+                    ? "badge-rejected"
+                    : "badge-draft"
+                }`}
+              >
+                {item.status}
+              </span>
+              <div className="case-title">
+                <strong>{item.title}</strong>
+                <small>
+                  <code>{item.id}</code> · {item.test_type} · {item.priority} ·{" "}
+                  {item.steps?.length ?? 0} steps
+                </small>
+              </div>
+            </div>
+          ))}
+          {!filtered.length && (
+            <p style={{ color: "var(--text-muted)", fontSize: "0.84rem" }}>
+              No cases match these filters.
+            </p>
+          )}
+        </div>
+
+        {/* Detailed Editor */}
+        {activeCase ? (
+          <CaseEditor
+            key={activeCase.id}
+            caseItem={activeCase}
+            reviewResult={reviewResult}
+            reviewing={reviewing}
+            onUpdate={onUpdate}
+            onDelete={() => onDelete(activeCase.id)}
+            onRegenerate={() => onRegenerate(activeCase.id)}
+          />
+        ) : (
+          <p style={{ color: "var(--text-muted)", fontSize: "0.84rem" }}>
+            Select a test case to edit steps or approve.
+          </p>
+        )}
+      </div>
+    </div>
+  );
 }
 
-function CaseEditor({ item, onUpdate, onDelete, onRegenerate }: { item: TestCase; onUpdate: (item: TestCase) => void; onDelete: () => void; onRegenerate: () => void }) {
-  const [draft, setDraft] = useState(item);
-  function patchStep(index: number, key: keyof Step, value: string) { setDraft((current) => ({ ...current, steps: current.steps.map((step, stepIndex) => stepIndex === index ? { ...step, [key]: value } : step) })); }
-  return <div className="detail-block editor"><Heading kicker={`${item.id} / ${item.status}`} title="Edit and review" /><label>Title<input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} /></label><div className="form-row"><label>Type<input value={draft.test_type} onChange={(event) => setDraft({ ...draft, test_type: event.target.value })} /></label><label>Priority<select value={draft.priority} onChange={(event) => setDraft({ ...draft, priority: event.target.value })}>{["High", "Medium", "Low"].map((value) => <option key={value}>{value}</option>)}</select></label><label>Review status<select value={draft.status} onChange={(event) => setDraft({ ...draft, status: event.target.value })}>{["Draft", "Approved", "Rejected"].map((value) => <option key={value}>{value}</option>)}</select></label></div>{draft.steps?.map((step, index) => <div className="step-editor" key={index}><h4>Step {index + 1}</h4><label>Action<input value={step.action} onChange={(event) => patchStep(index, "action", event.target.value)} /></label><div className="form-row"><label>Test data<input value={step.test_data ?? ""} onChange={(event) => patchStep(index, "test_data", event.target.value)} /></label><label>Locator requirement<input value={step.locator_requirement ?? ""} onChange={(event) => patchStep(index, "locator_requirement", event.target.value)} /></label></div><label>Expected result<input value={step.expected_result ?? ""} onChange={(event) => patchStep(index, "expected_result", event.target.value)} /></label></div>)}<div className="button-row"><button className="primary compact" onClick={() => onUpdate(draft)}>Save case</button><button className="secondary compact" onClick={() => onUpdate({ ...draft, status: "Approved" })}>Approve</button><button className="text-button" onClick={onRegenerate}>Regenerate scenario</button><button className="danger-button" onClick={onDelete}>Delete</button></div><div className="expectations"><strong>Expected results</strong>{item.expected_results?.map((result, index) => <p key={index}>{result}</p>)}</div></div>;
+function CaseEditor({
+  caseItem,
+  reviewResult,
+  reviewing,
+  onUpdate,
+  onDelete,
+  onRegenerate,
+}: {
+  caseItem: TestCase;
+  reviewResult: { passed: boolean; issues: string[] } | null;
+  reviewing: boolean;
+  onUpdate: (item: TestCase) => void;
+  onDelete: () => void;
+  onRegenerate: () => void;
+}) {
+  const [draft, setDraft] = useState<TestCase>(caseItem);
+
+  function patchStep(index: number, key: keyof Step, val: string) {
+    setDraft((curr) => ({
+      ...curr,
+      steps: curr.steps.map((st, i) => (i === index ? { ...st, [key]: val } : st)),
+    }));
+  }
+
+  return (
+    <div className="editor-panel">
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+        <h3 style={{ margin: 0, fontSize: "1.1rem", color: "#fff" }}>
+          Edit {draft.id}
+        </h3>
+        <span
+          className={`badge ${
+            draft.status === "Approved"
+              ? "badge-approved"
+              : draft.status === "Rejected"
+              ? "badge-rejected"
+              : "badge-draft"
+          }`}
+        >
+          {draft.status}
+        </span>
+      </div>
+
+      {/* Automated Traceability Check Results */}
+      <div style={{ marginBottom: 16 }}>
+        {reviewing ? (
+          <div style={{ fontSize: "0.76rem", color: "var(--teal)" }}>
+            Checking criteria traceability...
+          </div>
+        ) : reviewResult ? (
+          reviewResult.passed ? (
+            <div className="banner success" style={{ padding: "8px 12px", margin: 0, fontSize: "0.78rem" }}>
+              ✓ Criterion traceability and basic structure passed. Human approval is still required.
+            </div>
+          ) : (
+            <div className="banner error" style={{ padding: "8px 12px", margin: 0, fontSize: "0.78rem" }}>
+              ⚠️ Review findings: {reviewResult.issues.join(" · ")}
+            </div>
+          )
+        ) : null}
+      </div>
+
+      <div className="form-group">
+        <label>Title</label>
+        <input
+          type="text"
+          value={draft.title}
+          onChange={(e) => setDraft({ ...draft, title: e.target.value })}
+        />
+      </div>
+
+      <div className="grid-3" style={{ marginBottom: 14 }}>
+        <div className="form-group">
+          <label>Test Type</label>
+          <input
+            type="text"
+            value={draft.test_type}
+            onChange={(e) => setDraft({ ...draft, test_type: e.target.value })}
+          />
+        </div>
+        <div className="form-group">
+          <label>Priority</label>
+          <select
+            value={draft.priority}
+            onChange={(e) => setDraft({ ...draft, priority: e.target.value })}
+          >
+            <option value="High">High</option>
+            <option value="Medium">Medium</option>
+            <option value="Low">Low</option>
+          </select>
+        </div>
+        <div className="form-group">
+          <label>Review Status</label>
+          <select
+            value={draft.status}
+            onChange={(e) => setDraft({ ...draft, status: e.target.value })}
+          >
+            <option value="Draft">Draft</option>
+            <option value="Approved">Approved</option>
+            <option value="Rejected">Rejected</option>
+          </select>
+        </div>
+      </div>
+
+      {/* Steps Editor */}
+      <div style={{ maxHeight: "360px", overflowY: "auto", marginBottom: 16 }}>
+        {draft.steps?.map((step, idx) => (
+          <div key={idx} className="step-card">
+            <div className="step-header">Step {idx + 1}</div>
+            <div className="form-group" style={{ marginBottom: 8 }}>
+              <label>Action (e.g. Fill Username input, Click Submit button)</label>
+              <input
+                type="text"
+                value={step.action}
+                onChange={(e) => patchStep(idx, "action", e.target.value)}
+              />
+            </div>
+            <div className="grid-2" style={{ marginBottom: 8 }}>
+              <div className="form-group" style={{ margin: 0 }}>
+                <label>Test Data</label>
+                <input
+                  type="text"
+                  value={step.test_data ?? ""}
+                  onChange={(e) => patchStep(idx, "test_data", e.target.value)}
+                />
+              </div>
+              <div className="form-group" style={{ margin: 0 }}>
+                <label>Locator Requirement</label>
+                <input
+                  type="text"
+                  value={step.locator_requirement ?? ""}
+                  onChange={(e) => patchStep(idx, "locator_requirement", e.target.value)}
+                />
+              </div>
+            </div>
+            <div className="form-group" style={{ margin: 0 }}>
+              <label>Expected Result</label>
+              <textarea
+                style={{ minHeight: "48px" }}
+                value={step.expected_result ?? step.expected ?? ""}
+                onChange={(e) => patchStep(idx, "expected_result", e.target.value)}
+              />
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Action Buttons */}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
+        <button className="btn-primary" onClick={() => onUpdate(draft)}>
+          Save Edits
+        </button>
+        <button
+          className="btn-approve"
+          onClick={() => onUpdate({ ...draft, status: "Approved" })}
+        >
+          ✓ Approve
+        </button>
+        <button
+          className="btn-reject"
+          onClick={() => onUpdate({ ...draft, status: "Rejected" })}
+        >
+          ✕ Reject
+        </button>
+        <button className="btn-secondary" onClick={onRegenerate}>
+          ↺ Regenerate Scenario
+        </button>
+        <button className="btn-danger" style={{ marginLeft: "auto" }} onClick={onDelete}>
+          Delete
+        </button>
+      </div>
+    </div>
+  );
 }
 
-function ElementsView({ selected, settings, credentials, onCredentialsChange, onSaveTarget, onDiscover }: { selected: Requirement | null; settings: SettingsView | null; credentials: RuntimeCredentials; onCredentialsChange: (credentials: RuntimeCredentials) => void; onSaveTarget: (target: Target) => void; onDiscover: (target: Target, credentials?: RuntimeCredentials) => void }) {
+function ExportCaseButton({
+  format,
+  reqId,
+  status,
+}: {
+  format: string;
+  reqId?: string;
+  status?: string;
+}) {
+  async function download() {
+    try {
+      const q = new URLSearchParams({ format });
+      if (reqId) q.set("requirement_id", reqId);
+      if (status && status !== "All") q.set("status_filter", status);
+      const res = await fetch(`${API_BASE}/api/export/cases?${q}`);
+      if (!res.ok) throw new Error("Failed to export cases");
+      const blob = await res.blob();
+      const ext = format === "markdown" ? "md" : format === "xlsx" ? "xlsx" : format;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `test-cases.${ext}`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      window.alert("Could not download export.");
+    }
+  }
+
+  return (
+    <button className="btn-secondary" style={{ padding: "6px 12px", fontSize: "0.74rem" }} onClick={download}>
+      {format.toUpperCase()}
+    </button>
+  );
+}
+
+// ==========================================
+// 05 / FIND ELEMENTS (LOCATORS DISCOVERY)
+// ==========================================
+function ElementsView({
+  selected,
+  settings,
+  credentials,
+  onCredentialsChange,
+  onSaveTarget,
+  onDiscover,
+}: {
+  selected: Requirement | null;
+  settings: SettingsView | null;
+  credentials: RuntimeCredentials;
+  onCredentialsChange: (creds: RuntimeCredentials) => void;
+  onSaveTarget: (target: Target) => void;
+  onDiscover: (target: Target, creds?: RuntimeCredentials) => void;
+}) {
   const [target, setTarget] = useState<Target>(emptyTarget());
-  useEffect(() => { setTarget(selected?.target ? { ...emptyTarget(), ...selected.target } : emptyTarget()); }, [selected?.id, selected?.target]);
-  function update(key: keyof Target, value: string | boolean) { setTarget((current) => ({ ...current, [key]: value })); }
-  return <div className="view-grid"><section className="panel"><Heading kicker="Story-scoped environment" title="Find and validate elements" /><TargetFields target={target} update={update} /><button className="secondary compact" onClick={() => onSaveTarget(target)} disabled={!selected || !target.application_url}>Save target settings</button>{target.authentication_type === "Username & Password" && <div className="credential-grid"><label>Session username<input autoComplete="username" value={credentials.username} onChange={(event) => onCredentialsChange({ ...credentials, username: event.target.value })} /></label><label>Session password<input type="password" autoComplete="current-password" value={credentials.password} onChange={(event) => onCredentialsChange({ ...credentials, password: event.target.value })} /></label></div>}<button className="primary compact" disabled={!selected || !settings?.execution_enabled || !target.application_url || (target.authentication_type === "Username & Password" && (!credentials.username || !credentials.password))} onClick={() => onDiscover(target, target.authentication_type === "Username & Password" ? credentials : undefined)}>Discover shared elements</button>{!settings?.execution_enabled && <div className="callout warning">Live DOM discovery needs a browser worker. Vercel's serverless function does not include browser binaries; configure an execution worker to enable it.</div>}</section><section className="panel"><Heading kicker="Shared locator repository" title={`${selected?.locators?.length ?? 0} saved elements`} />{selected?.locators?.length ? selected.locators.map((locator, index) => <article className="locator-row" key={locator.id ?? `${locator.element}-${index}`}><span className={locator.validated ? "locator-valid" : "locator-invalid"}>{locator.validated ? "VALID" : "CHECK"}</span><div><strong>{locator.element}</strong><small>{locator.tag} / {locator.xpath}</small><small>{locator.candidates?.filter((candidate) => candidate.valid).length ?? 0} valid alternatives / confidence {Math.round((locator.confidence ?? 0) * 100)}%</small></div></article>) : <Empty>Save a target and scan from a browser worker to populate shared locators.</Empty>}</section></div>;
+
+  useEffect(() => {
+    setTarget(selected?.target ? { ...emptyTarget(), ...selected.target } : emptyTarget());
+  }, [selected?.id, selected?.target]);
+
+  function update(key: keyof Target, val: string | boolean) {
+    setTarget((curr) => ({ ...curr, [key]: val }));
+  }
+
+  const authRequired = target.authentication_type === "Username & Password";
+  const canDiscover =
+    selected &&
+    target.application_url &&
+    (!authRequired || (credentials.username && credentials.password));
+
+  return (
+    <div className="grid-2">
+      {/* Target Setup */}
+      <div className="panel">
+        <div className="panel-header">
+          <h2>Story Target & Guidance</h2>
+          {selected && <span className="badge badge-tag">{selected.id}</span>}
+        </div>
+
+        <div className="form-group">
+          <label>Application Website URL</label>
+          <input
+            type="text"
+            placeholder="https://qa.example.com"
+            value={target.application_url}
+            onChange={(e) => update("application_url", e.target.value)}
+          />
+        </div>
+
+        <div className="grid-3">
+          <div className="form-group">
+            <label>Authentication</label>
+            <select
+              value={target.authentication_type}
+              onChange={(e) => update("authentication_type", e.target.value)}
+            >
+              <option value="No Authentication">No Authentication</option>
+              <option value="Username & Password">Username & Password</option>
+              <option value="SSO">SSO</option>
+            </select>
+          </div>
+          <div className="form-group">
+            <label>Browser</label>
+            <select
+              value={target.browser}
+              onChange={(e) => update("browser", e.target.value)}
+            >
+              <option value="chromium">Chromium</option>
+              <option value="firefox">Firefox</option>
+              <option value="webkit">WebKit (Safari)</option>
+            </select>
+          </div>
+          <div className="form-group">
+            <label>Execution Mode</label>
+            <select
+              value={target.headless ? "headless" : "headed"}
+              onChange={(e) => update("headless", e.target.value === "headless")}
+            >
+              <option value="headless">Headless</option>
+              <option value="headed">Headed (Visual)</option>
+            </select>
+          </div>
+        </div>
+
+        {authRequired && (
+          <div
+            style={{
+              background: "var(--bg-base)",
+              padding: 14,
+              borderRadius: "var(--radius-md)",
+              borderLeft: "3px solid var(--teal)",
+              marginBottom: 16,
+            }}
+          >
+            <strong style={{ fontSize: "0.8rem", color: "#fff", display: "block", marginBottom: 8 }}>
+              Session Sign-In Credentials (Kept in memory, never stored in DB)
+            </strong>
+            <div className="grid-2" style={{ marginBottom: 10 }}>
+              <div className="form-group" style={{ margin: 0 }}>
+                <label>Username</label>
+                <input
+                  type="text"
+                  value={credentials.username}
+                  onChange={(e) =>
+                    onCredentialsChange({ ...credentials, username: e.target.value })
+                  }
+                  autoComplete="username"
+                />
+              </div>
+              <div className="form-group" style={{ margin: 0 }}>
+                <label>Password</label>
+                <input
+                  type="password"
+                  value={credentials.password}
+                  onChange={(e) =>
+                    onCredentialsChange({ ...credentials, password: e.target.value })
+                  }
+                  autoComplete="current-password"
+                />
+              </div>
+            </div>
+            <div className="grid-3">
+              <div className="form-group" style={{ margin: 0 }}>
+                <label>Username Label (opt)</label>
+                <input
+                  type="text"
+                  value={target.username_label}
+                  onChange={(e) => update("username_label", e.target.value)}
+                />
+              </div>
+              <div className="form-group" style={{ margin: 0 }}>
+                <label>Password Label (opt)</label>
+                <input
+                  type="text"
+                  value={target.password_label}
+                  onChange={(e) => update("password_label", e.target.value)}
+                />
+              </div>
+              <div className="form-group" style={{ margin: 0 }}>
+                <label>Submit Button Label (opt)</label>
+                <input
+                  type="text"
+                  value={target.submit_label}
+                  onChange={(e) => update("submit_label", e.target.value)}
+                />
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div className="form-group">
+          <label>Discovery Guidance (Optional)</label>
+          <textarea
+            placeholder="For example: focus on login form, header navigation, and project create buttons."
+            value={target.guidance}
+            onChange={(e) => update("guidance", e.target.value)}
+          />
+        </div>
+
+        <div style={{ display: "flex", gap: 12 }}>
+          <button
+            className="btn-secondary"
+            disabled={!selected || !target.application_url}
+            onClick={() => onSaveTarget(target)}
+          >
+            Save Target Configuration
+          </button>
+          <button
+            className="btn-primary"
+            disabled={!canDiscover}
+            onClick={() => onDiscover(target, authRequired ? credentials : undefined)}
+          >
+            🔍 Find Elements Across All Story Cases
+          </button>
+        </div>
+      </div>
+
+      {/* Discovered Locators Table */}
+      <div className="panel">
+        <div className="panel-header">
+          <h2>Shared Locator Repository</h2>
+          <span className="badge badge-tag">
+            {selected?.locators?.length ?? 0} saved elements
+          </span>
+        </div>
+
+        {selected?.locators?.length ? (
+          <div style={{ maxHeight: "640px", overflowY: "auto" }}>
+            {selected.locators.map((loc, idx) => (
+              <div
+                key={loc.id ?? idx}
+                style={{
+                  background: "var(--bg-base)",
+                  border: "1px solid var(--border-subtle)",
+                  borderRadius: "var(--radius-md)",
+                  padding: 14,
+                  marginBottom: 10,
+                }}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                  <strong style={{ color: "#fff", fontSize: "0.88rem" }}>
+                    {loc.element}
+                  </strong>
+                  <span className={`badge ${loc.validated ? "badge-pass" : "badge-blocked"}`}>
+                    {loc.validated ? "VALIDATED" : "UNVERIFIED"}
+                  </span>
+                </div>
+                <div style={{ fontSize: "0.76rem", color: "var(--text-dim)", marginBottom: 4 }}>
+                  Tag: <code>{loc.tag}</code> · XPath: <code>{loc.xpath}</code>
+                </div>
+                <div style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}>
+                  Alternatives: {loc.candidates?.filter((c) => c.valid).length ?? 0} valid /{" "}
+                  {loc.candidates?.length ?? 0} candidates · Confidence:{" "}
+                  {Math.round((loc.confidence ?? 1) * 100)}%
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p style={{ color: "var(--text-muted)", fontSize: "0.84rem" }}>
+            Configure the target website above and run element discovery to inspect the DOM.
+          </p>
+        )}
+      </div>
+    </div>
+  );
 }
 
-function TargetFields({ target, update }: { target: Target; update: (key: keyof Target, value: string | boolean) => void }) {
-  return <div className="target-form"><label>Application URL<input value={target.application_url} onChange={(event) => update("application_url", event.target.value)} placeholder="https://qa.example.com" /></label><div className="form-row"><label>Authentication<select value={target.authentication_type} onChange={(event) => update("authentication_type", event.target.value)}><option>No Authentication</option><option>Username &amp; Password</option><option>SSO</option></select></label><label>Browser<select value={target.browser} onChange={(event) => update("browser", event.target.value)}>{["chromium", "firefox", "webkit"].map((value) => <option key={value}>{value}</option>)}</select></label><label>Mode<select value={target.headless ? "headless" : "headed"} onChange={(event) => update("headless", event.target.value === "headless")}><option>headless</option><option>headed</option></select></label></div>{target.authentication_type === "Username & Password" && <div className="form-row"><label>Username field label<input value={target.username_label} onChange={(event) => update("username_label", event.target.value)} /></label><label>Password field label<input value={target.password_label} onChange={(event) => update("password_label", event.target.value)} /></label><label>Submit label<input value={target.submit_label} onChange={(event) => update("submit_label", event.target.value)} /></label></div>}<label>Discovery guidance<textarea value={target.guidance} onChange={(event) => update("guidance", event.target.value)} /></label></div>;
+// ==========================================
+// 06 / SCRIPT GENERATION VIEW
+// ==========================================
+function ScriptsView({
+  cases,
+  selected,
+  run,
+  onMessage,
+}: {
+  cases: TestCase[];
+  selected: Requirement | null;
+  run: (label: string, op: () => Promise<void>) => Promise<void>;
+  onMessage: (msg: string) => void;
+}) {
+  const [activeCaseId, setActiveCaseId] = useState("");
+  const [source, setSource] = useState("");
+  const [copied, setCopied] = useState(false);
+
+  const activeCase = cases.find((c) => c.id === activeCaseId) ?? cases[0];
+
+  useEffect(() => {
+    if (activeCase) {
+      setActiveCaseId(activeCase.id);
+      api<{ source: string }>(`/api/cases/${activeCase.id}/script`)
+        .then((res) => setSource(res.source || ""))
+        .catch(() => setSource(""));
+    } else {
+      setSource("");
+    }
+  }, [activeCase?.id]);
+
+  async function generate() {
+    if (!activeCase) return;
+    await run(`Generating Playwright Python script for ${activeCase.id}...`, async () => {
+      const res = await api<{ source: string }>(`/api/cases/${activeCase.id}/script`, {
+        method: "POST",
+        body: JSON.stringify({ case_id: activeCase.id }),
+      });
+      setSource(res.source);
+      onMessage(`Generated script for ${activeCase.id}. Review and save it before standalone execution.`);
+    });
+  }
+
+  async function save() {
+    if (!activeCase || !source.trim()) return;
+    await run("Validating syntax and saving script...", async () => {
+      await api(`/api/cases/${activeCase.id}/script`, {
+        method: "PUT",
+        body: JSON.stringify({ source }),
+      });
+      onMessage(`Script saved to version history and filesystem.`);
+    });
+  }
+
+  function download() {
+    if (!activeCase || !source) return;
+    const blob = new Blob([source], { type: "text/x-python" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${activeCase.id}.py`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function copyScript() {
+    if (!source) return;
+    try {
+      await navigator.clipboard.writeText(source);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      window.alert("Clipboard write failed.");
+    }
+  }
+
+  const hasTodos = source.includes("TODO:");
+
+  return (
+    <div className="panel">
+      <div className="panel-header">
+        <h2>Generate and Edit Playwright Scripts</h2>
+        <span className="badge badge-tag">{selected?.id || "No story selected"}</span>
+      </div>
+
+      <div style={{ display: "flex", gap: 14, alignItems: "center", marginBottom: 16 }}>
+        <select
+          value={activeCase?.id ?? ""}
+          onChange={(e) => setActiveCaseId(e.target.value)}
+          style={{ minWidth: 260 }}
+        >
+          <option value="">Select test case</option>
+          {cases.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.id} · {c.title}
+            </option>
+          ))}
+        </select>
+        <span style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}>
+          Target: {selected?.target?.application_url || "Target not configured yet"}
+        </span>
+      </div>
+
+      {hasTodos && (
+        <div className="banner error" style={{ marginBottom: 12 }}>
+          ⚠️ This script contains unmapped steps (TODO). Review actions and map locators before standalone use.
+        </div>
+      )}
+
+      <textarea
+        className="code-box"
+        spellCheck={false}
+        value={source}
+        onChange={(e) => setSource(e.target.value)}
+        placeholder="Generate a standalone Playwright script for an approved test case..."
+      />
+
+      <div style={{ display: "flex", gap: 12, marginTop: 14 }}>
+        <button className="btn-primary" onClick={generate} disabled={!activeCase}>
+          ⚡ Generate Script
+        </button>
+        <button className="btn-secondary" onClick={save} disabled={!activeCase || !source.trim()}>
+          Validate & Save Script
+        </button>
+        <button className="btn-secondary" onClick={copyScript} disabled={!source.trim()}>
+          {copied ? "✓ Copied!" : "📋 Copy to Clipboard"}
+        </button>
+        <button className="btn-secondary" onClick={download} disabled={!source.trim()}>
+          ⬇ Download .py
+        </button>
+      </div>
+    </div>
+  );
 }
 
-function ScriptsView({ cases, selected, onMessage, run }: { cases: TestCase[]; selected: Requirement | null; onMessage: (message: string) => void; run: (label: string, operation: () => Promise<void>) => Promise<void> }) {
-  const [caseId, setCaseId] = useState(""); const [source, setSource] = useState(""); const active = cases.find((item) => item.id === caseId) ?? cases[0];
-  useEffect(() => { if (active) { setCaseId(active.id); api<{ source: string }>(`/api/cases/${active.id}/script`).then((result) => setSource(result.source)).catch(() => setSource("")); } else setSource(""); }, [active?.id]);
-  async function generate() { if (!active) return; await run("Generating Playwright script...", async () => { const result = await api<{ source: string }>(`/api/cases/${active.id}/script`, { method: "POST", body: JSON.stringify({ case_id: active.id }) }); setSource(result.source); onMessage("Generated script. Review and save it before use."); }); }
-  async function save() { if (!active) return; await run("Validating and saving script...", async () => { await api(`/api/cases/${active.id}/script`, { method: "PUT", body: JSON.stringify({ source }) }); onMessage("Script saved to version history."); }); }
-  function download() { if (!active || !source) return; const link = document.createElement("a"); link.href = URL.createObjectURL(new Blob([source], { type: "text/x-python" })); link.download = `${active.id}.py`; link.click(); URL.revokeObjectURL(link.href); }
-  return <section className="panel"><Heading kicker="Script review" title="Generate and edit Playwright scripts" /><div className="filters"><select value={active?.id ?? ""} onChange={(event) => setCaseId(event.target.value)}><option value="">Select test case</option>{cases.map((item) => <option key={item.id} value={item.id}>{item.id} / {item.title}</option>)}</select><span className="muted">{selected?.target?.application_url ?? "Configure this story's target first."}</span></div><textarea className="code-editor" spellCheck={false} value={source} onChange={(event) => setSource(event.target.value)} placeholder="Generate a script for a case with a saved target and reviewed locators." /><div className="button-row"><button className="primary compact" onClick={generate} disabled={!active}>Generate script</button><button className="secondary compact" onClick={save} disabled={!active || !source}>Validate and save</button><button className="text-button" onClick={download} disabled={!source}>Download .py</button></div></section>;
+// ==========================================
+// 07 / TEST EXECUTION VIEW
+// ==========================================
+function ExecutionView({
+  cases,
+  selected,
+  settings,
+  credentials,
+  onCredentialsChange,
+  onExecuteBatch,
+  onPreviewImage,
+}: {
+  cases: TestCase[];
+  selected: Requirement | null;
+  settings: SettingsView | null;
+  credentials: RuntimeCredentials;
+  onCredentialsChange: (creds: RuntimeCredentials) => void;
+  onExecuteBatch: (caseIds: string[], creds?: RuntimeCredentials) => Promise<void>;
+  onPreviewImage: (src: string) => void;
+}) {
+  const approved = cases.filter((c) => c.status === "Approved");
+  const [selectedCaseIds, setSelectedCaseIds] = useState<string[]>([]);
+  const [lastOutcomes, setLastOutcomes] = useState<Step[]>([]);
+  const authRequired = selected?.target?.authentication_type === "Username & Password";
+
+  function toggleCase(id: string) {
+    setSelectedCaseIds((curr) =>
+      curr.includes(id) ? curr.filter((x) => x !== id) : [...curr, id]
+    );
+  }
+
+  function selectAll() {
+    setSelectedCaseIds(approved.map((c) => c.id));
+  }
+
+  function clearAll() {
+    setSelectedCaseIds([]);
+  }
+
+  const executionDisabled = !settings?.execution_enabled;
+
+  return (
+    <div className="panel">
+      <div className="panel-header">
+        <h2>Execute Approved Test Cases in Isolated Browser</h2>
+        <span className="badge badge-approved">{approved.length} approved cases</span>
+      </div>
+
+      {executionDisabled && (
+        <div className="banner error" style={{ marginBottom: 16 }}>
+          ⚠️ Browser execution requires a worker environment with Playwright installed. If running serverless on Vercel, attach a dedicated browser service.
+        </div>
+      )}
+
+      {authRequired && (
+        <div
+          style={{
+            background: "var(--bg-base)",
+            padding: 14,
+            borderRadius: "var(--radius-md)",
+            borderLeft: "3px solid var(--teal)",
+            marginBottom: 16,
+          }}
+        >
+          <strong style={{ fontSize: "0.8rem", color: "#fff", display: "block", marginBottom: 6 }}>
+            Session Sign-in Details
+          </strong>
+          <div className="grid-2">
+            <input
+              type="text"
+              placeholder="Username"
+              value={credentials.username}
+              onChange={(e) =>
+                onCredentialsChange({ ...credentials, username: e.target.value })
+              }
+            />
+            <input
+              type="password"
+              placeholder="Password"
+              value={credentials.password}
+              onChange={(e) =>
+                onCredentialsChange({ ...credentials, password: e.target.value })
+              }
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Case Checkboxes */}
+      <div style={{ marginBottom: 18 }}>
+        <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 10 }}>
+          <button className="btn-secondary" style={{ padding: "6px 12px", fontSize: "0.76rem" }} onClick={selectAll}>
+            Select All Approved
+          </button>
+          <button className="btn-secondary" style={{ padding: "6px 12px", fontSize: "0.76rem" }} onClick={clearAll}>
+            Clear Selection
+          </button>
+          <span style={{ fontSize: "0.78rem", color: "var(--text-muted)" }}>
+            {selectedCaseIds.length} of {approved.length} cases chosen
+          </span>
+        </div>
+
+        <div style={{ maxHeight: "280px", overflowY: "auto" }}>
+          {approved.map((tc) => (
+            <label
+              key={tc.id}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 12,
+                padding: "10px 14px",
+                background: "var(--bg-base)",
+                borderRadius: "var(--radius-md)",
+                border: "1px solid var(--border-subtle)",
+                marginBottom: 6,
+                cursor: "pointer",
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={selectedCaseIds.includes(tc.id)}
+                onChange={() => toggleCase(tc.id)}
+              />
+              <span style={{ fontWeight: 600, fontSize: "0.85rem", color: "#fff" }}>
+                {tc.title}
+              </span>
+              <small style={{ color: "var(--text-muted)", marginLeft: "auto" }}>
+                <code>{tc.id}</code> · {tc.steps?.length ?? 0} steps
+              </small>
+            </label>
+          ))}
+          {!approved.length && (
+            <p style={{ color: "var(--text-muted)", fontSize: "0.84rem" }}>
+              No approved test cases. Approve cases in the Test cases tab before execution.
+            </p>
+          )}
+        </div>
+      </div>
+
+      <div style={{ display: "flex", gap: 12, marginBottom: 24 }}>
+        <button
+          className="btn-primary"
+          disabled={!selectedCaseIds.length || executionDisabled}
+          onClick={() =>
+            onExecuteBatch(selectedCaseIds, authRequired ? credentials : undefined)
+          }
+        >
+          ▶ Execute Selected ({selectedCaseIds.length})
+        </button>
+        <button
+          className="btn-secondary"
+          disabled={!approved.length || executionDisabled}
+          onClick={() =>
+            onExecuteBatch(
+              approved.map((c) => c.id),
+              authRequired ? credentials : undefined
+            )
+          }
+        >
+          ▶ Execute All Approved ({approved.length})
+        </button>
+      </div>
+
+      <p style={{ color: "var(--text-muted)", fontSize: "0.78rem", lineHeight: 1.5 }}>
+        Each case executes in an isolated browser context. Outcomes and visual screenshot evidence
+        are permanently recorded in SQLite. Batch runs continue even if an individual test fails.
+      </p>
+    </div>
+  );
 }
 
-function ExecutionView({ cases, selected, settings, credentials, onCredentialsChange, onExecute }: { cases: TestCase[]; selected: Requirement | null; settings: SettingsView | null; credentials: RuntimeCredentials; onCredentialsChange: (credentials: RuntimeCredentials) => void; onExecute: (item: TestCase, credentials?: RuntimeCredentials) => Promise<void> }) {
-  const approved = cases.filter((item) => item.status === "Approved");
-  const auth = selected?.target?.authentication_type === "Username & Password";
-  return <section className="panel"><Heading kicker="Approved cases only" title="Test execution" /><div className="callout warning">{settings?.execution_enabled ? "Browser execution is enabled for this service." : "Execution is unavailable on this Vercel serverless deployment. Connect a browser worker; the same endpoint can then execute approved cases and persist step evidence."}</div>{auth && <div className="credential-grid"><label>Session username<input autoComplete="username" value={credentials.username} onChange={(event) => onCredentialsChange({ ...credentials, username: event.target.value })} /></label><label>Session password<input type="password" autoComplete="current-password" value={credentials.password} onChange={(event) => onCredentialsChange({ ...credentials, password: event.target.value })} /></label></div>}<div className="button-row"><button className="primary compact" disabled={!approved.length || !settings?.execution_enabled || (auth && (!credentials.username || !credentials.password))} onClick={async () => { for (const item of approved) await onExecute(item, auth ? credentials : undefined); }}>Execute all approved ({approved.length})</button></div><div className="case-list">{approved.map((item) => <article className="case-row" key={item.id}><span className="case-status approved">Approved</span><div><strong>{item.title}</strong><small>{item.id} / {item.steps.length} steps</small></div><button className="secondary compact" disabled={!settings?.execution_enabled || (auth && (!credentials.username || !credentials.password))} onClick={() => onExecute(item, auth ? credentials : undefined)}>Run case</button></article>)}{!approved.length && <Empty>Approve cases in Test cases before running them.</Empty>}</div><p className="muted">Each case runs in an isolated browser. Results appear in execution history; batches continue to the next case after an individual failure.</p></section>;
+// ==========================================
+// 08 / EXECUTION HISTORY VIEW
+// ==========================================
+function HistoryView({
+  runs,
+  onPreviewImage,
+}: {
+  runs: Run[];
+  onPreviewImage: (src: string) => void;
+}) {
+  const [selectedRunId, setSelectedRunId] = useState("");
+  const [detail, setDetail] = useState<{
+    run: Run;
+    results: TestResult[];
+  } | null>(null);
+
+  useEffect(() => {
+    const chosen = runs.find((r) => r.id === selectedRunId) ?? runs[0];
+    if (chosen) {
+      setSelectedRunId(chosen.id);
+      api<typeof detail>(`/api/runs/${chosen.id}`)
+        .then(setDetail)
+        .catch(() => setDetail(null));
+    } else {
+      setDetail(null);
+    }
+  }, [selectedRunId, runs.length]);
+
+  return (
+    <div className="panel">
+      <div className="panel-header">
+        <h2>Execution Run History & Visual Evidence</h2>
+        {detail && <span className="badge badge-tag">{detail.run.id}</span>}
+      </div>
+
+      <div style={{ display: "flex", gap: 14, alignItems: "center", marginBottom: 20 }}>
+        <select
+          value={selectedRunId}
+          onChange={(e) => setSelectedRunId(e.target.value)}
+          style={{ minWidth: 320 }}
+        >
+          {runs.map((r) => (
+            <option key={r.id} value={r.id}>
+              {r.id} · {new Date(r.started_at).toLocaleString()} · {r.status}
+            </option>
+          ))}
+        </select>
+        {detail && (
+          <a
+            href={`${API_BASE}/api/export/evidence/${detail.run.id}`}
+            download
+            className="btn-secondary"
+            style={{ textDecoration: "none" }}
+          >
+            📦 Download Run Evidence ZIP
+          </a>
+        )}
+      </div>
+
+      {detail ? (
+        <>
+          <div className="metrics-row" style={{ marginBottom: 20 }}>
+            {Object.entries(detail.run.summary || {}).map(([k, v]) => (
+              <div key={k} className="metric-card" style={{ padding: 14 }}>
+                <span>{k}</span>
+                <strong style={{ fontSize: "1.5rem", margin: "4px 0" }}>{v}</strong>
+                <small>Run outcome</small>
+              </div>
+            ))}
+          </div>
+
+          <div>
+            {detail.results.map((res, i) => (
+              <div
+                key={res.id ?? i}
+                style={{
+                  background: "var(--bg-base)",
+                  border: "1px solid var(--border-subtle)",
+                  borderRadius: "var(--radius-lg)",
+                  padding: 18,
+                  marginBottom: 16,
+                }}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                  <h3 style={{ margin: 0, fontSize: "1rem", color: "#fff" }}>
+                    {res.title || res.test_case_id}
+                  </h3>
+                  <span
+                    className={`badge ${
+                      res.status === "PASS"
+                        ? "badge-pass"
+                        : res.status === "FAIL"
+                        ? "badge-fail"
+                        : "badge-blocked"
+                    }`}
+                  >
+                    {res.status} · {res.duration?.toFixed(2)}s
+                  </span>
+                </div>
+
+                {res.error && (
+                  <div className="banner error" style={{ padding: "8px 12px", margin: "8px 0" }}>
+                    {res.error}
+                  </div>
+                )}
+
+                {/* Steps Table */}
+                {res.steps && res.steps.length > 0 && (
+                  <div className="table-wrap" style={{ marginTop: 12 }}>
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Step #</th>
+                          <th>Action</th>
+                          <th>Expected</th>
+                          <th>Actual</th>
+                          <th>Status</th>
+                          <th>Duration</th>
+                          <th>Evidence</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {res.steps.map((st, sidx) => {
+                          const screenshotName = st.screenshot_path
+                            ? st.screenshot_path.split(/[\\/]/).pop()
+                            : "";
+                          const screenshotUrl = screenshotName
+                            ? `${API_BASE}/api/evidence/${detail.run.id}/${res.test_case_id}/${screenshotName}`
+                            : "";
+
+                          return (
+                            <tr key={sidx}>
+                              <td>{st.step_number || sidx + 1}</td>
+                              <td>{st.action}</td>
+                              <td>{st.expected || "—"}</td>
+                              <td>{st.actual || "—"}</td>
+                              <td>
+                                <span
+                                  className={`badge ${
+                                    st.status === "PASS"
+                                      ? "badge-pass"
+                                      : st.status === "FAIL"
+                                      ? "badge-fail"
+                                      : "badge-blocked"
+                                  }`}
+                                >
+                                  {st.status}
+                                </span>
+                              </td>
+                              <td>{st.duration ? `${st.duration.toFixed(2)}s` : "—"}</td>
+                              <td>
+                                {screenshotUrl ? (
+                                  <button
+                                    className="btn-secondary"
+                                    style={{ padding: "4px 8px", fontSize: "0.72rem" }}
+                                    onClick={() => onPreviewImage(screenshotUrl)}
+                                  >
+                                    📷 View
+                                  </button>
+                                ) : (
+                                  "—"
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </>
+      ) : (
+        <p style={{ color: "var(--text-muted)", fontSize: "0.84rem" }}>
+          No runs recorded yet. Execute test cases to view historical traces and screenshots.
+        </p>
+      )}
+    </div>
+  );
 }
 
-function HistoryView({ runs }: { runs: Run[] }) {
-  const [runId, setRunId] = useState(""); const [detail, setDetail] = useState<{ run: Run; results: Array<Record<string, unknown>> } | null>(null);
-  useEffect(() => { const chosen = runs.find((item) => item.id === runId) ?? runs[0]; if (chosen) { setRunId(chosen.id); api<typeof detail>(`/api/runs/${chosen.id}`).then(setDetail).catch(() => setDetail(null)); } else setDetail(null); }, [runId, runs.length]);
-  return <section className="panel"><Heading kicker="Traceability" title="Execution history" /><select className="wide-select" value={runId} onChange={(event) => setRunId(event.target.value)}>{runs.map((item) => <option key={item.id} value={item.id}>{item.id} / {item.started_at} / {item.status}</option>)}</select>{detail ? <><div className="button-row"><EvidenceDownloadButton runId={detail.run.id} /></div><div className="metrics compact-metrics">{Object.entries(detail.run.summary ?? {}).map(([key, value]) => <Metric key={key} label={key} value={value} detail="run summary" />)}</div>{detail.results.map((result, index) => <article className="result-panel" key={`${result.id}-${index}`}><h3>{String(result.title ?? result.test_case_id)} / {String(result.status)}</h3><p>{String(result.error || "No test-level error.")}</p><pre>{JSON.stringify(result.steps, null, 2)}</pre></article>)}</> : <Empty>No persisted runs. Browser execution must complete on a service with durable storage.</Empty>}</section>;
+// ==========================================
+// 09 / REPORTING VIEW
+// ==========================================
+function ReportingView({
+  report,
+  runs,
+}: {
+  report: Report | null;
+  runs: Run[];
+}) {
+  const [runFilter, setRunFilter] = useState("All runs");
+  const [priorityFilter, setPriorityFilter] = useState("All priorities");
+  const [statusFilter, setStatusFilter] = useState("All statuses");
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
+
+  const rows = report?.results ?? [];
+
+  const filtered = rows.filter((r) => {
+    const runMatch = runFilter === "All runs" || r.run_id === runFilter;
+    const priorityMatch = priorityFilter === "All priorities" || r.priority === priorityFilter;
+    const statusMatch = statusFilter === "All statuses" || r.status === statusFilter;
+    const d = r.run_started_at ? r.run_started_at.slice(0, 10) : "";
+    const fromMatch = !fromDate || d >= fromDate;
+    const toMatch = !toDate || d <= toDate;
+    return runMatch && priorityMatch && statusMatch && fromMatch && toMatch;
+  });
+
+  const counts: Record<string, number> = {};
+  filtered.forEach((r) => {
+    counts[r.status] = (counts[r.status] ?? 0) + 1;
+  });
+
+  const pass = counts.PASS ?? 0;
+  const fail = counts.FAIL ?? 0;
+  const blocked = counts.BLOCKED ?? 0;
+  const executed = pass + fail;
+  const passRate = executed ? `${Math.round((pass / executed) * 100)}%` : "—";
+
+  function downloadReport(format: "json" | "csv") {
+    let content = "";
+    if (format === "json") {
+      content = JSON.stringify(filtered, null, 2);
+    } else {
+      const headers = ["run_id", "test_case_id", "title", "status", "priority", "test_type", "duration"];
+      content = [
+        headers.join(","),
+        ...filtered.map((r) =>
+          headers.map((h) => `"${String((r as Record<string, unknown>)[h] ?? "").replaceAll('"', '""')}"`).join(",")
+        ),
+      ].join("\n");
+    }
+    const blob = new Blob([content], { type: format === "json" ? "application/json" : "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `execution-report.${format}`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  return (
+    <div className="panel">
+      <div className="panel-header">
+        <h2>Consolidated Outcomes & Analytics</h2>
+        <span className="badge badge-tag">{filtered.length} filtered results</span>
+      </div>
+
+      {/* Filter toolbar */}
+      <div className="filter-bar">
+        <select value={runFilter} onChange={(e) => setRunFilter(e.target.value)}>
+          <option value="All runs">All Runs</option>
+          {runs.map((r) => (
+            <option key={r.id} value={r.id}>
+              {r.id}
+            </option>
+          ))}
+        </select>
+        <select value={priorityFilter} onChange={(e) => setPriorityFilter(e.target.value)}>
+          <option value="All priorities">All Priorities</option>
+          <option value="High">High</option>
+          <option value="Medium">Medium</option>
+          <option value="Low">Low</option>
+        </select>
+        <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+          <option value="All statuses">All Statuses</option>
+          <option value="PASS">PASS</option>
+          <option value="FAIL">FAIL</option>
+          <option value="BLOCKED">BLOCKED</option>
+        </select>
+        <input
+          type="date"
+          title="From date"
+          value={fromDate}
+          onChange={(e) => setFromDate(e.target.value)}
+        />
+        <input
+          type="date"
+          title="To date"
+          value={toDate}
+          onChange={(e) => setToDate(e.target.value)}
+        />
+        <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+          <button className="btn-secondary" onClick={() => downloadReport("json")}>
+            JSON
+          </button>
+          <button className="btn-secondary" onClick={() => downloadReport("csv")}>
+            CSV
+          </button>
+        </div>
+      </div>
+
+      <div className="metrics-row">
+        <div className="metric-card">
+          <span>Total Executed</span>
+          <strong>{filtered.length}</strong>
+          <small>Filtered results</small>
+        </div>
+        <div className="metric-card">
+          <span>Passed</span>
+          <strong style={{ color: "#34d399" }}>{pass}</strong>
+          <small>PASSED assertions</small>
+        </div>
+        <div className="metric-card">
+          <span>Failed</span>
+          <strong style={{ color: "#fb7185" }}>{fail}</strong>
+          <small>FAILED assertions</small>
+        </div>
+        <div className="metric-card">
+          <span>Blocked</span>
+          <strong style={{ color: "#fbbf24" }}>{blocked}</strong>
+          <small>BLOCKED / unmapped</small>
+        </div>
+        <div className="metric-card">
+          <span>Pass Rate</span>
+          <strong style={{ color: "#38bdf8" }}>{passRate}</strong>
+          <small>From recorded runs</small>
+        </div>
+      </div>
+
+      {/* Visual Charts */}
+      <div className="charts-grid">
+        <div className="chart-card">
+          <h3>Status Distribution</h3>
+          {["PASS", "FAIL", "BLOCKED"].map((st) => {
+            const count = counts[st] ?? 0;
+            const max = Math.max(1, ...Object.values(counts));
+            const pct = Math.round((count / max) * 100);
+            return (
+              <div key={st} className="bar-row">
+                <span>{st}</span>
+                <div className="bar-track">
+                  <div
+                    className={`bar-fill ${
+                      st === "PASS" ? "pass" : st === "FAIL" ? "fail" : "blocked"
+                    }`}
+                    style={{ width: `${pct}%` }}
+                  />
+                </div>
+                <strong>{count}</strong>
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="chart-card">
+          <h3>Outcomes by Priority</h3>
+          {["High", "Medium", "Low"].map((prio) => {
+            const prioCount = filtered.filter((r) => (r.priority || "Medium") === prio).length;
+            const max = Math.max(1, filtered.length);
+            const pct = Math.round((prioCount / max) * 100);
+            return (
+              <div key={prio} className="bar-row">
+                <span>{prio}</span>
+                <div className="bar-track">
+                  <div className="bar-fill general" style={{ width: `${pct}%` }} />
+                </div>
+                <strong>{prioCount}</strong>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Results Table */}
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Run ID</th>
+              <th>Case ID</th>
+              <th>Title</th>
+              <th>Status</th>
+              <th>Priority</th>
+              <th>Duration</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.map((r, idx) => (
+              <tr key={idx}>
+                <td>
+                  <code>{r.run_id}</code>
+                </td>
+                <td>
+                  <code>{r.test_case_id}</code>
+                </td>
+                <td style={{ fontWeight: 600 }}>{r.title}</td>
+                <td>
+                  <span
+                    className={`badge ${
+                      r.status === "PASS"
+                        ? "badge-pass"
+                        : r.status === "FAIL"
+                        ? "badge-fail"
+                        : "badge-blocked"
+                    }`}
+                  >
+                    {r.status}
+                  </span>
+                </td>
+                <td>{r.priority || "Medium"}</td>
+                <td>{r.duration?.toFixed(2)}s</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
 }
 
-function ReportingView({ report, runs }: { report: Report | null; runs: Run[] }) {
-  const [runId, setRunId] = useState("All runs"); const [requirementId, setRequirementId] = useState("All requirements"); const [priority, setPriority] = useState("All priorities"); const [status, setStatus] = useState("All statuses"); const [fromDate, setFromDate] = useState(""); const [toDate, setToDate] = useState("");
-  const sourceRows = report?.results ?? [];
-  const requirementOptions = Array.from(new Set(sourceRows.map((item) => String(item.requirement_id ?? "Unknown"))));
-  const priorityOptions = Array.from(new Set(sourceRows.map((item) => String(item.priority ?? "Unknown"))));
-  const rows = sourceRows.filter((item) => { const date = String(item.run_started_at ?? "").slice(0, 10); return (runId === "All runs" || item.run_id === runId) && (requirementId === "All requirements" || item.requirement_id === requirementId) && (priority === "All priorities" || item.priority === priority) && (status === "All statuses" || item.status === status) && (!fromDate || date >= fromDate) && (!toDate || date <= toDate); }); const counts: Record<string, number> = {}; const priorityCounts: Record<string, Record<string, number>> = {};
-  rows.forEach((row) => { const outcome = String(row.status); const level = String(row.priority ?? "Unknown"); counts[outcome] = (counts[outcome] ?? 0) + 1; priorityCounts[level] ??= {}; priorityCounts[level][outcome] = (priorityCounts[level][outcome] ?? 0) + 1; }); const executed = (counts.PASS ?? 0) + (counts.FAIL ?? 0); const maxPriorityCount = Math.max(1, ...Object.values(priorityCounts).flatMap(Object.values));
-  return <section className="panel"><Heading kicker="Persisted outcomes" title="Reporting" /><div className="filters"><select value={runId} onChange={(event) => setRunId(event.target.value)}><option>All runs</option>{runs.map((run) => <option key={run.id} value={run.id}>{run.id}</option>)}</select><select value={requirementId} onChange={(event) => setRequirementId(event.target.value)}><option>All requirements</option>{requirementOptions.map((value) => <option key={value}>{value}</option>)}</select><select value={priority} onChange={(event) => setPriority(event.target.value)}><option>All priorities</option>{priorityOptions.map((value) => <option key={value}>{value}</option>)}</select><select value={status} onChange={(event) => setStatus(event.target.value)}><option>All statuses</option>{["PASS", "FAIL", "BLOCKED", "SKIPPED"].map((value) => <option key={value}>{value}</option>)}</select><label className="date-filter">From<input type="date" value={fromDate} onChange={(event) => setFromDate(event.target.value)} /></label><label className="date-filter">To<input type="date" value={toDate} onChange={(event) => setToDate(event.target.value)} /></label><ReportExportButton rows={rows} format="json" /><ReportExportButton rows={rows} format="csv" /></div><div className="metrics"><Metric label="Total" value={rows.length} detail="filtered results" /><Metric label="Passed" value={counts.PASS ?? 0} detail="PASS" /><Metric label="Failed" value={counts.FAIL ?? 0} detail="FAIL" /><Metric label="Blocked" value={counts.BLOCKED ?? 0} detail="BLOCKED" /><Metric label="Pass rate" value={executed ? `${Math.round((counts.PASS ?? 0) / executed * 100)}%` : "--"} detail="PASS / (PASS + FAIL)" /></div><div className="report-charts"><div><h3>Status distribution</h3>{["PASS", "FAIL", "BLOCKED", "SKIPPED"].map((value) => <DistributionBar key={value} label={value} value={counts[value] ?? 0} max={Math.max(1, ...Object.values(counts))} />)}</div><div><h3>Outcomes by priority</h3>{Object.entries(priorityCounts).map(([level, outcomes]) => <DistributionBar key={level} label={level} value={Object.values(outcomes).reduce((sum, value) => sum + value, 0)} max={maxPriorityCount} />)}</div></div><div className="table-wrap"><table><thead><tr>{["Run", "Case", "Title", "Requirement", "Status", "Priority", "Duration", "Browser"].map((heading) => <th key={heading}>{heading}</th>)}</tr></thead><tbody>{rows.map((row, index) => <tr key={`${row.id}-${index}`}>{["run_id", "test_case_id", "title", "requirement_id", "status", "priority", "duration", "browser"].map((field) => <td key={field}>{String(row[field] ?? "-")}</td>)}</tr>)}</tbody></table></div>{!rows.length && <Empty>Reports include saved execution outcomes only; drafts and scripts are not counted as runs.</Empty>}</section>;
+// ==========================================
+// 10 / SUITES VIEW
+// ==========================================
+function SuitesView({
+  suites,
+  cases,
+  onSave,
+  onDelete,
+}: {
+  suites: Suite[];
+  cases: TestCase[];
+  onSave: (suite: { name: string; description: string; case_ids: string[] }) => void;
+  onDelete: (id: string) => void;
+}) {
+  const [name, setName] = useState("");
+  const [desc, setDesc] = useState("");
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+
+  function handleSubmit(e: FormEvent) {
+    e.preventDefault();
+    if (name.trim()) {
+      onSave({ name: name.trim(), description: desc.trim(), case_ids: selectedIds });
+      setName("");
+      setDesc("");
+      setSelectedIds([]);
+    }
+  }
+
+  return (
+    <div className="grid-2">
+      <div className="panel">
+        <div className="panel-header">
+          <h2>Create Test Suite</h2>
+        </div>
+        <form onSubmit={handleSubmit}>
+          <div className="form-group">
+            <label>Suite Name</label>
+            <input
+              type="text"
+              placeholder="e.g. Smoke Suite, Critical Path"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              required
+            />
+          </div>
+          <div className="form-group">
+            <label>Description</label>
+            <input
+              type="text"
+              placeholder="Optional suite description"
+              value={desc}
+              onChange={(e) => setDesc(e.target.value)}
+            />
+          </div>
+
+          <div className="form-group">
+            <label>Select Test Cases to Group ({selectedIds.length} chosen)</label>
+            <div style={{ maxHeight: "260px", overflowY: "auto", marginTop: 6 }}>
+              {cases.map((c) => (
+                <label
+                  key={c.id}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 10,
+                    padding: "8px 10px",
+                    background: "var(--bg-base)",
+                    borderRadius: "var(--radius-md)",
+                    marginBottom: 6,
+                    fontSize: "0.82rem",
+                    color: "#fff",
+                    cursor: "pointer",
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={selectedIds.includes(c.id)}
+                    onChange={(e) =>
+                      setSelectedIds(
+                        e.target.checked
+                          ? [...selectedIds, c.id]
+                          : selectedIds.filter((id) => id !== c.id)
+                      )
+                    }
+                  />
+                  <span>{c.title}</span>
+                  <small style={{ color: "var(--text-muted)", marginLeft: "auto" }}>
+                    <code>{c.id}</code>
+                  </small>
+                </label>
+              ))}
+            </div>
+          </div>
+
+          <button className="btn-primary" style={{ width: "100%", marginTop: 12 }}>
+            Create Test Suite
+          </button>
+        </form>
+      </div>
+
+      <div className="panel">
+        <div className="panel-header">
+          <h2>Configured Suites</h2>
+          <span className="badge badge-tag">{suites.length} suites</span>
+        </div>
+
+        <div>
+          {suites.map((s) => (
+            <div
+              key={s.id}
+              style={{
+                background: "var(--bg-base)",
+                border: "1px solid var(--border-subtle)",
+                borderRadius: "var(--radius-md)",
+                padding: 14,
+                marginBottom: 12,
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+              }}
+            >
+              <div>
+                <strong style={{ color: "#fff", fontSize: "0.95rem" }}>{s.name}</strong>
+                <p style={{ margin: "4px 0", fontSize: "0.82rem", color: "var(--text-dim)" }}>
+                  {s.description || "No description provided."}
+                </p>
+                <small style={{ color: "var(--teal)" }}>
+                  {s.case_ids?.length ?? s.case_count} test cases linked
+                </small>
+              </div>
+              <button className="btn-danger" onClick={() => onDelete(s.id)}>
+                Delete
+              </button>
+            </div>
+          ))}
+          {!suites.length && (
+            <p style={{ color: "var(--text-muted)", fontSize: "0.84rem" }}>
+              No suites created yet. Create suites to organize regression and smoke passes.
+            </p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
 }
 
-function SuitesView({ suites, cases, onSave, onDelete }: { suites: Suite[]; cases: TestCase[]; onSave: (suite: { name: string; description: string; case_ids: string[] }) => void; onDelete: (id: string) => void }) {
-  const [name, setName] = useState(""); const [description, setDescription] = useState(""); const [ids, setIds] = useState<string[]>([]);
-  function submit(event: FormEvent) { event.preventDefault(); if (name.trim()) { onSave({ name: name.trim(), description, case_ids: ids }); setName(""); setDescription(""); setIds([]); } }
-  return <div className="view-grid"><section className="panel"><Heading kicker="Reusable groups" title="Test suites" /><form className="target-form" onSubmit={submit}><label>Suite name<input value={name} onChange={(event) => setName(event.target.value)} required /></label><label>Description<input value={description} onChange={(event) => setDescription(event.target.value)} /></label><fieldset><legend>Cases</legend>{cases.map((item) => <label className="check-row" key={item.id}><input type="checkbox" checked={ids.includes(item.id)} onChange={(event) => setIds(event.target.checked ? [...ids, item.id] : ids.filter((id) => id !== item.id))} />{item.id} / {item.title}</label>)}</fieldset><button className="primary compact">Create suite</button></form></section><section className="panel"><Heading kicker="Saved collections" title={`${suites.length} suites`} />{suites.map((suite) => <article className="suite-row" key={suite.id}><div><strong>{suite.name}</strong><p>{suite.description}</p><small>{suite.case_ids?.length ?? suite.case_count} cases</small></div><button className="danger-button" onClick={() => onDelete(suite.id)}>Delete</button></article>)}{!suites.length && <Empty>Create a suite to group cases for repeatable runs.</Empty>}</section></div>;
-}
+// ==========================================
+// 11 / SETTINGS VIEW
+// ==========================================
+function SettingsView({
+  settings,
+  onUpdateSettings,
+}: {
+  settings: SettingsView | null;
+  onUpdateSettings: (newConfig: Partial<SettingsView> & { llm_api_key?: string }) => void;
+}) {
+  const [provider, setProvider] = useState(settings?.llm_provider || "openai_compatible");
+  const [baseUrl, setBaseUrl] = useState(settings?.llm_base_url || "https://api.openai.com/v1");
+  const [model, setModel] = useState(settings?.llm_model || "");
+  const [apiKey, setApiKey] = useState("");
+  const [browser, setBrowser] = useState(settings?.browser || "chromium");
+  const [headless, setHeadless] = useState(settings?.headless ?? true);
+  const [timeoutMs, setTimeoutMs] = useState(settings?.timeout_ms ?? 10000);
 
-function SettingsView({ settings }: { settings: SettingsView | null }) {
-  return <section className="panel"><Heading kicker="Environment" title="Settings and service readiness" /><div className="settings-grid"><Setting label="LLM provider" value={settings?.llm_provider ?? "Loading"} /><Setting label="LLM credentials" value={settings?.llm_configured ? "Configured" : "Offline draft mode"} /><Setting label="Browser" value={settings?.browser ?? "Loading"} /><Setting label="Timeout" value={`${settings?.timeout_ms ?? "-"} ms`} /><Setting label="Execution" value={settings?.execution_enabled ? "Enabled" : "Worker required"} /><Setting label="Persistence" value={settings?.storage ?? "Loading"} /></div><div className="callout warning"><strong>Production storage note</strong><br />Vercel /tmp storage is temporary and isolated between function instances. Configure a durable database before treating requirement, suite, script, or run records as production-persistent. LLM/API secrets must be configured in deployment environment settings, never in browser storage.</div><p className="muted">Streamlit keeps its session-specific provider settings in memory. Production provider and security settings are server-managed environment variables.</p></section>;
-}
+  useEffect(() => {
+    if (settings) {
+      setProvider(settings.llm_provider || "openai_compatible");
+      setBaseUrl(
+        settings.llm_base_url ||
+          (settings.llm_provider === "anthropic"
+            ? "https://api.anthropic.com/v1"
+            : "https://api.openai.com/v1")
+      );
+      setModel(settings.llm_model || "");
+      setBrowser(settings.browser || "chromium");
+      setHeadless(settings.headless ?? true);
+      setTimeoutMs(settings.timeout_ms || 10000);
+    }
+  }, [settings]);
 
-function ExportButton({ format, requirementId, statusFilter }: { format: string; requirementId?: string; statusFilter?: string }) {
-  async function download() { try { const query = new URLSearchParams({ format }); if (requirementId) query.set("requirement_id", requirementId); if (statusFilter) query.set("status_filter", statusFilter); const response = await fetch(`${API_BASE}/api/export/cases?${query}`); if (!response.ok) throw new Error("Export failed"); const blob = await response.blob(); const link = document.createElement("a"); link.href = URL.createObjectURL(blob); link.download = `test-cases.${format === "markdown" ? "md" : format}`; link.click(); URL.revokeObjectURL(link.href); } catch { window.alert("Export could not be downloaded."); } }
-  return <button className="outline-button" onClick={download}>Export {format.toUpperCase()}</button>;
-}
+  function handleSave() {
+    onUpdateSettings({
+      llm_provider: provider,
+      llm_base_url: baseUrl,
+      llm_model: model,
+      llm_api_key: apiKey ? apiKey : undefined,
+      browser,
+      headless,
+      timeout_ms: timeoutMs,
+    });
+  }
 
-function ReportExportButton({ rows, format }: { rows: Array<Record<string, unknown>>; format: "json" | "csv" }) {
-  function download() { const columns = Array.from(new Set(rows.flatMap((row) => Object.keys(row)))); const content = format === "json" ? JSON.stringify(rows, null, 2) : [columns.join(","), ...rows.map((row) => columns.map((key) => `"${String(row[key] ?? "").replaceAll('"', '""')}"`).join(","))].join("\n"); const link = document.createElement("a"); link.href = URL.createObjectURL(new Blob([content], { type: format === "json" ? "application/json" : "text/csv" })); link.download = `execution-report.${format}`; link.click(); URL.revokeObjectURL(link.href); }
-  return <button className="outline-button" onClick={download}>Download report {format.toUpperCase()}</button>;
-}
+  return (
+    <div className="grid-2">
+      <div className="panel">
+        <div className="panel-header">
+          <h2>LLM Provider & Credentials</h2>
+        </div>
+        <p style={{ color: "var(--text-dim)", fontSize: "0.84rem" }}>
+          Configure hosted LLM provider settings (OpenAI-compatible or Anthropic Messages). If left
+          unconfigured, the system runs in offline draft mode with deterministic heuristics.
+        </p>
 
-function EvidenceDownloadButton({ runId }: { runId: string }) {
-  async function download() { try { const response = await fetch(`${API_BASE}/api/export/evidence/${runId}`); if (!response.ok) throw new Error(); const link = document.createElement("a"); link.href = URL.createObjectURL(await response.blob()); link.download = `${runId}-evidence.zip`; link.click(); URL.revokeObjectURL(link.href); } catch { window.alert("Evidence archive could not be downloaded."); } }
-  return <button className="outline-button" onClick={download}>Download run evidence ZIP</button>;
-}
+        <div className="form-group">
+          <label>Provider</label>
+          <select
+            value={provider}
+            onChange={(e) => {
+              const nextP = e.target.value;
+              setProvider(nextP);
+              if (nextP === "anthropic") {
+                setBaseUrl("https://api.anthropic.com/v1");
+              } else {
+                setBaseUrl("https://api.openai.com/v1");
+              }
+            }}
+          >
+            <option value="openai_compatible">OpenAI-Compatible Chat Completions</option>
+            <option value="anthropic">Anthropic Messages</option>
+          </select>
+        </div>
 
-function Metric({ label, value, detail }: { label: string; value: string | number; detail: string }) { return <div className="metric"><span>{label}</span><strong>{value}</strong><small>{detail}</small></div>; }
-function Heading({ kicker, title }: { kicker: string; title: string }) { return <div className="section-heading"><div><p className="eyebrow">{kicker}</p><h2>{title}</h2></div></div>; }
-function Empty({ children }: { children: React.ReactNode }) { return <div className="empty">{children}</div>; }
-function Setting({ label, value }: { label: string; value: string }) { return <div className="setting-row"><small>{label}</small><strong>{value}</strong></div>; }
-function DistributionBar({ label, value, max }: { label: string; value: number; max: number }) { return <div className="distribution-row"><span>{label}</span><div><i style={{ width: `${Math.max(value ? 3 : 0, Math.round(value / max * 100))}%` }} /></div><strong>{value}</strong></div>; }
+        <div className="form-group">
+          <label>API Base URL</label>
+          <input
+            type="text"
+            value={baseUrl}
+            onChange={(e) => setBaseUrl(e.target.value)}
+          />
+        </div>
+
+        <div className="form-group">
+          <label>Model Name</label>
+          <input
+            type="text"
+            placeholder="e.g. gpt-4o, claude-3-5-sonnet-20241022"
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+          />
+        </div>
+
+        <div className="form-group">
+          <label>API Key {settings?.llm_configured && "(Configured)"}</label>
+          <input
+            type="password"
+            placeholder={settings?.llm_configured ? "••••••••••••••••" : "Enter API Key"}
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+          />
+        </div>
+
+        <button className="btn-primary" onClick={handleSave}>
+          Apply Provider & Runtime Settings
+        </button>
+      </div>
+
+      <div className="panel">
+        <div className="panel-header">
+          <h2>Browser & Runtime Settings</h2>
+        </div>
+
+        <div className="form-group">
+          <label>Default Browser Engine</label>
+          <select value={browser} onChange={(e) => setBrowser(e.target.value)}>
+            <option value="chromium">Chromium (Chrome, Edge)</option>
+            <option value="firefox">Firefox</option>
+            <option value="webkit">WebKit (Safari)</option>
+          </select>
+        </div>
+
+        <div className="form-group">
+          <label>Execution Mode</label>
+          <select
+            value={headless ? "headless" : "headed"}
+            onChange={(e) => setHeadless(e.target.value === "headless")}
+          >
+            <option value="headless">Headless (Background)</option>
+            <option value="headed">Headed (Visible Window)</option>
+          </select>
+        </div>
+
+        <div className="form-group">
+          <label>Action Timeout (ms)</label>
+          <input
+            type="text"
+            value={timeoutMs}
+            onChange={(e) => setTimeoutMs(Number(e.target.value) || 10000)}
+          />
+        </div>
+
+        <div
+          style={{
+            background: "var(--bg-base)",
+            padding: 14,
+            borderRadius: "var(--radius-md)",
+            border: "1px solid var(--border-subtle)",
+            marginTop: 18,
+          }}
+        >
+          <strong style={{ fontSize: "0.82rem", color: "#fff", display: "block", marginBottom: 6 }}>
+            Environment Diagnostic Info
+          </strong>
+          <div style={{ fontSize: "0.76rem", color: "var(--text-dim)", lineHeight: 1.6 }}>
+            <div>Database: <code>{settings?.database_path || "data/automation.db"}</code></div>
+            <div>Evidence Dir: <code>{settings?.evidence_dir || "data/evidence"}</code></div>
+            <div>Worker Status: {settings?.execution_enabled ? "✓ Ready" : "⚠️ Needs Worker"}</div>
+            <div>Storage Persistence: {settings?.storage}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}

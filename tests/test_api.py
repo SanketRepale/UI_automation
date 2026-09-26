@@ -123,3 +123,35 @@ def test_case_review_script_suite_and_export_workflow(tmp_path: Path) -> None:
     assert client.get("/api/export/cases", params={"format": "xlsx"}).content.startswith(b"PK")
     assert client.get("/api/report").json()["counts"] == {}
     assert client.get("/api/export/report", params={"format": "csv"}).headers["content-type"].startswith("text/csv")
+
+    review = client.get(f"/api/cases/{case['id']}/review")
+    assert review.status_code == 200
+    assert "issues" in review.json()
+    assert "passed" in review.json()
+
+    settings_get = client.get("/api/settings")
+    assert settings_get.status_code == 200
+    assert "browser" in settings_get.json()
+
+    settings_update = client.post("/api/settings", json={"browser": "firefox", "timeout_ms": 15000})
+    assert settings_update.status_code == 200
+    assert settings_update.json()["browser"] == "firefox"
+    assert settings_update.json()["timeout_ms"] == 15000
+
+
+def test_evidence_endpoint_serves_files(tmp_path: Path) -> None:
+    evidence_dir = tmp_path / "evidence"
+    sample_dir = evidence_dir / "RUN-TEST" / "TC-001"
+    sample_dir.mkdir(parents=True)
+    sample_img = sample_dir / "step_1_pass.png"
+    sample_img.write_bytes(b"\x89PNG\r\n\x1a\nfakeimagecontent")
+
+    app_settings = Settings(database_path=tmp_path / "evidence.db", uploads_dir=tmp_path / "uploads", evidence_dir=evidence_dir, scripts_dir=tmp_path / "scripts", reports_dir=tmp_path / "reports")
+    client = TestClient(create_app(app_settings))
+    res = client.get("/api/evidence/RUN-TEST/TC-001/step_1_pass.png")
+    assert res.status_code == 200
+    assert res.headers["content-type"] == "image/png"
+    assert res.content == b"\x89PNG\r\n\x1a\nfakeimagecontent"
+
+    missing = client.get("/api/evidence/RUN-TEST/TC-001/missing.png")
+    assert missing.status_code == 404

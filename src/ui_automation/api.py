@@ -536,11 +536,13 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
         if request.case_id != case_id:
             raise HTTPException(status_code=400, detail="Case identifiers do not match")
         case = _require_case(services.repository, case_id)
-        context = _case_context(services.repository, case)
         run_id = f"RUN-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
 
         if not _browser_execution_enabled():
-            # Serverless simulated execution
+            # Serverless simulated execution — build context safely without requiring a target
+            target = services.repository.requirement_target(case["requirement_id"])
+            target_url = target["application_url"] if target else "https://example.com"
+            browser_label = (target.get("browser") if target else "chromium") or "chromium"
             step_results = []
             for s in case.get("steps", []):
                 step_num = s.get("number") or s.get("step_number") or len(step_results) + 1
@@ -559,11 +561,12 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
                 "error": None,
                 "steps": step_results,
             }
-            services.repository.create_run(run_id, context.get("target_url") or "API", f"{context.get('browser', 'chromium')} (serverless)")
+            services.repository.create_run(run_id, target_url, f"{browser_label} (serverless)")
             services.repository.save_result(run_id, case_id, outcome["status"], outcome["duration"], outcome["error"], {"mode": "serverless"}, outcome["steps"])
             services.repository.finish_run(run_id, {"status": outcome["status"], "case_id": case_id})
             return {"run_id": run_id, "outcome": outcome}
 
+        context = _case_context(services.repository, case)
         from ui_automation.executor import ExecutionService
         services.repository.create_run(run_id, services.settings.target_environment or "API", context["browser"])
         credentials = _runtime_credentials(services.settings, request.credentials.model_dump() if request.credentials else None)
@@ -578,8 +581,8 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
         from collections import Counter
         req = _require_requirement(services.repository, request.requirement_id)
         target = services.repository.requirement_target(request.requirement_id)
-        target_url = target["application_url"] if target else "https://example.com"
-        browser_name = target.get("browser") or "chromium"
+        target_url = (target["application_url"] if target else "https://example.com") or "https://example.com"
+        browser_name = (target.get("browser") if target else "chromium") or "chromium"
         run_id = f"RUN-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
 
         if not _browser_execution_enabled():

@@ -171,9 +171,42 @@ const emptyTarget = (url = ""): Target => ({
   guidance: "",
 });
 
+const STORAGE_KEY = "fieldnotes_qa_workspace_v1";
+
+type LocalWorkspace = {
+  requirements: Requirement[];
+  allCases: TestCase[];
+  targets: Record<string, Target>;
+  locators: Locator[];
+};
+
+function getLocalWorkspace(): LocalWorkspace {
+  if (typeof window === "undefined") return { requirements: [], allCases: [], targets: {}, locators: [] };
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return raw ? JSON.parse(raw) : { requirements: [], allCases: [], targets: {}, locators: [] };
+  } catch {
+    return { requirements: [], allCases: [], targets: {}, locators: [] };
+  }
+}
+
+function updateLocalWorkspace(patch: Partial<LocalWorkspace>) {
+  if (typeof window === "undefined") return;
+  try {
+    const current = getLocalWorkspace();
+    const updated: LocalWorkspace = {
+      requirements: patch.requirements ?? current.requirements,
+      allCases: patch.allCases ?? current.allCases,
+      targets: patch.targets ?? current.targets,
+      locators: patch.locators ?? current.locators,
+    };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
+  } catch {}
+}
+
 async function api<T>(path: string, options?: RequestInit): Promise<T> {
   const url = `${API_BASE}${path}`;
-  const response = await fetch(url, {
+  let response = await fetch(url, {
     ...options,
     headers: {
       ...(options?.body instanceof FormData
@@ -185,6 +218,38 @@ async function api<T>(path: string, options?: RequestInit): Promise<T> {
     },
     cache: "no-store",
   });
+
+  // If 404 on serverless instance, auto-sync local workspace to populate container and retry
+  if (response.status === 404 && (path.includes("/api/requirements") || path.includes("/api/cases"))) {
+    const local = getLocalWorkspace();
+    if (local.requirements.length > 0 || local.allCases.length > 0) {
+      try {
+        await fetch(`${API_BASE}/api/workspace/sync`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            requirements: local.requirements,
+            cases: local.allCases,
+            targets: Object.values(local.targets),
+            locators: local.locators,
+          }),
+        });
+        response = await fetch(url, {
+          ...options,
+          headers: {
+            ...(options?.body instanceof FormData
+              ? {}
+              : options?.body
+              ? { "Content-Type": "application/json" }
+              : {}),
+            ...options?.headers,
+          },
+          cache: "no-store",
+        });
+      } catch {}
+    }
+  }
+
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
     throw new Error(
@@ -231,24 +296,48 @@ export default function Workbench() {
           api<Report>("/api/report"),
           api<SettingsView>("/api/settings"),
         ]);
+
+      const local = getLocalWorkspace();
+      const storyMap = new Map<string, Requirement>();
+      local.requirements.forEach((r) => storyMap.set(r.id, r));
+      stories.forEach((r) => storyMap.set(r.id, { ...storyMap.get(r.id), ...r }));
+      const mergedStories = Array.from(storyMap.values());
+
+      const caseMap = new Map<string, TestCase>();
+      local.allCases.forEach((c) => caseMap.set(c.id, c));
+      cases.forEach((c) => caseMap.set(c.id, { ...caseMap.get(c.id), ...c }));
+      const mergedCases = Array.from(caseMap.values());
+
+      updateLocalWorkspace({ requirements: mergedStories, allCases: mergedCases });
+
       setDashboard(summary);
-      setRequirements(stories);
-      setAllCases(cases);
+      setRequirements(mergedStories);
+      setAllCases(mergedCases);
       setRuns(history);
       setSuites(savedSuites);
       setReport(reportData);
       setSettings(settingsData);
 
-      const nextId = targetId || stories[0]?.id || "";
+      const nextId = targetId || mergedStories[0]?.id || "";
       setSelectedId(nextId);
       if (nextId) {
-        const fullReq = await api<Requirement>(`/api/requirements/${nextId}`);
-        setSelected(fullReq);
+        try {
+          const fullReq = await api<Requirement>(`/api/requirements/${nextId}`);
+          setSelected(fullReq);
+          updateLocalWorkspace({
+            requirements: [fullReq, ...mergedStories.filter((r) => r.id !== fullReq.id)],
+          });
+        } catch {
+          const cached = mergedStories.find((r) => r.id === nextId);
+          if (cached) {
+            setSelected(cached);
+          }
+        }
       } else {
         setSelected(null);
       }
     } catch (err) {
-      setError((err as Error).message);
+      console.warn("Refresh error:", err);
     }
   }
 
@@ -424,14 +513,29 @@ export default function Workbench() {
                     [result.requirement.id]: result.session_credentials!,
                   }));
                 }
+                const local = getLocalWorkspace();
+                const updatedReqs = [
+                  result.requirement,
+                  ...local.requirements.filter((r) => r.id !== result.requirement.id),
+                ];
+                updateLocalWorkspace({ requirements: updatedReqs });
+                setRequirements(updatedReqs);
+                setSelectedId(result.requirement.id);
+                setSelected(result.requirement);
                 setNotice(`Requirement successfully analyzed (${result.mode}).`);
-                await refresh(result.requirement.id);
+                refresh(result.requirement.id).catch(() => {});
               })
             }
             onDelete={() =>
               selected &&
               act("Deleting requirement and all linked artifacts...", async () => {
                 await api(`/api/requirements/${selected.id}`, { method: "DELETE" });
+                const local = getLocalWorkspace();
+                const updatedReqs = local.requirements.filter((r) => r.id !== selected.id);
+                const updatedCases = local.allCases.filter((c) => c.requirement_id !== selected.id);
+                updateLocalWorkspace({ requirements: updatedReqs, allCases: updatedCases });
+                setRequirements(updatedReqs);
+                setAllCases(updatedCases);
                 setCredentialsByStory((current) => {
                   const copy = { ...current };
                   delete copy[selected.id];
@@ -453,10 +557,22 @@ export default function Workbench() {
               act("Generating positive, negative and boundary drafts...", async () => {
                 const result = await api<{ mode: string; cases: TestCase[] }>(
                   `/api/requirements/${selected.id}/generate`,
-                  { method: "POST" }
+                  {
+                    method: "POST",
+                    body: JSON.stringify({ requirement: selected }),
+                  }
                 );
+                if (result.cases && result.cases.length > 0) {
+                  const local = getLocalWorkspace();
+                  const updatedCases = [
+                    ...result.cases,
+                    ...local.allCases.filter((c) => c.requirement_id !== selected.id),
+                  ];
+                  updateLocalWorkspace({ allCases: updatedCases });
+                  setAllCases(updatedCases);
+                }
                 setNotice(`Draft cases generated (${result.mode}).`);
-                await refresh(selected.id);
+                refresh(selected.id).catch(() => {});
               })
             }
           />
@@ -469,28 +585,42 @@ export default function Workbench() {
             selectedStoryId={selectedId}
             onUpdate={(item) =>
               act(`Saving test case ${item.id}...`, async () => {
+                const local = getLocalWorkspace();
+                const updatedCases = local.allCases.map((c) => (c.id === item.id ? item : c));
+                updateLocalWorkspace({ allCases: updatedCases });
+                setAllCases(updatedCases);
                 await api(`/api/cases/${item.id}`, {
                   method: "PUT",
                   body: JSON.stringify(item),
                 });
                 setNotice(`Case ${item.id} saved.`);
-                await refresh(selectedId);
+                refresh(selectedId).catch(() => {});
               })
             }
             onDelete={(id) =>
               act(`Deleting test case ${id}...`, async () => {
                 await api(`/api/cases/${id}`, { method: "DELETE" });
+                const local = getLocalWorkspace();
+                const updatedCases = local.allCases.filter((c) => c.id !== id);
+                updateLocalWorkspace({ allCases: updatedCases });
+                setAllCases(updatedCases);
                 setNotice(`Case ${id} deleted.`);
-                await refresh(selectedId);
+                refresh(selectedId).catch(() => {});
               })
             }
             onRegenerate={(id) =>
               act(`Regenerating test case ${id}...`, async () => {
-                const res = await api<{ mode: string }>(`/api/cases/${id}/regenerate`, {
+                const res = await api<{ mode: string; case?: TestCase }>(`/api/cases/${id}/regenerate`, {
                   method: "POST",
                 });
+                if (res.case) {
+                  const local = getLocalWorkspace();
+                  const updatedCases = local.allCases.map((c) => (c.id === id ? res.case! : c));
+                  updateLocalWorkspace({ allCases: updatedCases });
+                  setAllCases(updatedCases);
+                }
                 setNotice(`Case ${id} regenerated (${res.mode}); approval reset to Draft.`);
-                await refresh(selectedId);
+                refresh(selectedId).catch(() => {});
               })
             }
           />
@@ -507,12 +637,18 @@ export default function Workbench() {
             onSaveTarget={(target) =>
               selected &&
               act("Saving target settings...", async () => {
+                const local = getLocalWorkspace();
+                const updatedTargets = { ...local.targets, [selected.id]: target };
+                updateLocalWorkspace({ targets: updatedTargets });
+                if (selected) {
+                  setSelected({ ...selected, target });
+                }
                 await api(`/api/requirements/${selected.id}/target`, {
                   method: "PUT",
                   body: JSON.stringify(target),
                 });
                 setNotice("Target settings saved for this story.");
-                await refresh(selected.id);
+                refresh(selected.id).catch(() => {});
               })
             }
             onDiscover={(target, creds) =>

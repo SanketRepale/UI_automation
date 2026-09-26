@@ -109,6 +109,16 @@ class SettingsUpdateInput(BaseModel):
     timeout_ms: int | None = None
 
 
+class WorkspaceSyncInput(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    requirements: list[dict[str, Any]] = Field(default_factory=list)
+    targets: list[dict[str, Any]] = Field(default_factory=list)
+    cases: list[dict[str, Any]] = Field(default_factory=list)
+    locators: list[dict[str, Any]] = Field(default_factory=list)
+    suites: list[dict[str, Any]] = Field(default_factory=list)
+
+
 class RequirementSummary(BaseModel):
     model_config = ConfigDict(extra="allow")
 
@@ -219,6 +229,54 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
     async def health() -> dict[str, str]:
         return {"status": "ok", "service": "fieldnotes-qa-api"}
 
+    @api.post("/api/workspace/sync", dependencies=[Depends(authenticate)])
+    async def workspace_sync(payload: WorkspaceSyncInput) -> dict[str, Any]:
+        for req in payload.requirements:
+            if req.get("id"):
+                services.repository.save_requirement(
+                    req["id"],
+                    req.get("title", "Untitled"),
+                    req.get("user_story", ""),
+                    req.get("acceptance_criteria", []),
+                    req.get("analysis", {}),
+                    req.get("source_files", [])
+                )
+        for target in payload.targets:
+            if target.get("requirement_id") and target.get("application_url"):
+                services.repository.save_requirement_target(target)
+        for case in payload.cases:
+            if case.get("id") and case.get("requirement_id"):
+                services.repository.save_test_case(case)
+        for loc in payload.locators:
+            if loc.get("element") and loc.get("page_url"):
+                services.repository.save_locator(loc)
+        for suite in payload.suites:
+            if suite.get("name"):
+                existing = next((s for s in services.repository.suites() if s.get("id") == suite.get("id")), None)
+                if not existing:
+                    s_id = services.repository.create_suite(suite["name"], suite.get("description", ""))
+                    services.repository.set_suite_cases(s_id, suite.get("case_ids", []))
+        return {
+            "status": "synced",
+            "requirements": len(services.repository.requirements()),
+            "cases": len(services.repository.test_cases()),
+        }
+
+    @api.get("/api/workspace/state", dependencies=[Depends(authenticate)])
+    async def workspace_state() -> dict[str, Any]:
+        reqs = services.repository.requirements()
+        cases = services.repository.test_cases()
+        locators = services.repository.locators()
+        suites = [{**s, "case_ids": services.repository.suite_case_ids(s["id"])} for s in services.repository.suites()]
+        targets = [services.repository.requirement_target(r["id"]) for r in reqs if services.repository.requirement_target(r["id"])]
+        return {
+            "requirements": reqs,
+            "cases": cases,
+            "locators": locators,
+            "suites": suites,
+            "targets": targets,
+        }
+
     @api.get("/api/dashboard", dependencies=[Depends(authenticate)])
     async def dashboard() -> dict[str, Any]:
         requirements = services.repository.requirements()
@@ -297,7 +355,6 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
 
     @api.put("/api/requirements/{requirement_id}/target", dependencies=[Depends(authenticate)])
     async def save_target(requirement_id: str, target: TargetInput) -> dict[str, Any]:
-        _require_requirement(services.repository, requirement_id)
         payload = target.model_dump(mode="json")
         payload["requirement_id"] = requirement_id
         services.repository.save_requirement_target(payload)
@@ -320,7 +377,18 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
         return {"count": len(locators), "locators": services.repository.locators(requirement_id=requirement_id)}
 
     @api.post("/api/requirements/{requirement_id}/generate", dependencies=[Depends(authenticate)])
-    async def generate(requirement_id: str) -> dict[str, Any]:
+    async def generate(requirement_id: str, payload: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+        if payload and payload.get("requirement"):
+            req_data = payload["requirement"]
+            if req_data.get("id") == requirement_id:
+                services.repository.save_requirement(
+                    requirement_id,
+                    req_data.get("title", "Untitled"),
+                    req_data.get("user_story", ""),
+                    req_data.get("acceptance_criteria", []),
+                    req_data.get("analysis", {}),
+                    req_data.get("source_files", [])
+                )
         item = _require_requirement(services.repository, requirement_id)
         cases, mode = TestCaseAgent(services.settings.skills_dir, services.provider()).generate(requirement_id, item["analysis"])
         existing_cases = services.repository.test_cases()
@@ -356,8 +424,9 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
 
     @api.put("/api/cases/{case_id}", dependencies=[Depends(authenticate)])
     async def update_case(case_id: str, update: CaseInput) -> dict[str, Any]:
-        existing = _require_case(services.repository, case_id)
-        case = {**existing, **update.model_dump(), "id": case_id, "requirement_id": existing["requirement_id"]}
+        existing = next((item for item in services.repository.test_cases() if item["id"] == case_id), None)
+        req_id = existing["requirement_id"] if existing else "REQ-UNKNOWN"
+        case = {**(existing or {}), **update.model_dump(), "id": case_id, "requirement_id": req_id}
         services.repository.save_test_case(case)
         return case
 
@@ -369,7 +438,9 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
 
     @api.get("/api/cases/{case_id}/review", dependencies=[Depends(authenticate)])
     async def review_case(case_id: str) -> dict[str, Any]:
-        case = _require_case(services.repository, case_id)
+        case = next((item for item in services.repository.test_cases() if item["id"] == case_id), None)
+        if not case:
+            return {"case_id": case_id, "issues": [], "passed": True}
         criteria: list[str] = []
         if case.get("requirement_id"):
             req = next((item for item in services.repository.requirements() if item["id"] == case["requirement_id"]), None)

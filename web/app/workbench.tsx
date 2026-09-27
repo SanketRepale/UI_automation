@@ -60,6 +60,8 @@ type LocatorCandidate = {
 
 type Locator = {
   id?: string;
+  requirement_id?: string;
+  test_case_id?: string;
   element: string;
   tag: string;
   xpath: string;
@@ -178,15 +180,49 @@ type LocalWorkspace = {
   allCases: TestCase[];
   targets: Record<string, Target>;
   locators: Locator[];
+  runs: Run[];
+  results: TestResult[];
+  suites: Suite[];
+  scripts: Record<string, string>;
 };
 
 function getLocalWorkspace(): LocalWorkspace {
-  if (typeof window === "undefined") return { requirements: [], allCases: [], targets: {}, locators: [] };
+  if (typeof window === "undefined") {
+    return {
+      requirements: [],
+      allCases: [],
+      targets: {},
+      locators: [],
+      runs: [],
+      results: [],
+      suites: [],
+      scripts: {},
+    };
+  }
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? JSON.parse(raw) : { requirements: [], allCases: [], targets: {}, locators: [] };
+    const parsed = raw ? JSON.parse(raw) : {};
+    return {
+      requirements: Array.isArray(parsed.requirements) ? parsed.requirements : [],
+      allCases: Array.isArray(parsed.allCases) ? parsed.allCases : [],
+      targets: typeof parsed.targets === "object" && parsed.targets ? parsed.targets : {},
+      locators: Array.isArray(parsed.locators) ? parsed.locators : [],
+      runs: Array.isArray(parsed.runs) ? parsed.runs : [],
+      results: Array.isArray(parsed.results) ? parsed.results : [],
+      suites: Array.isArray(parsed.suites) ? parsed.suites : [],
+      scripts: typeof parsed.scripts === "object" && parsed.scripts ? parsed.scripts : {},
+    };
   } catch {
-    return { requirements: [], allCases: [], targets: {}, locators: [] };
+    return {
+      requirements: [],
+      allCases: [],
+      targets: {},
+      locators: [],
+      runs: [],
+      results: [],
+      suites: [],
+      scripts: {},
+    };
   }
 }
 
@@ -199,6 +235,10 @@ function updateLocalWorkspace(patch: Partial<LocalWorkspace>) {
       allCases: patch.allCases ?? current.allCases,
       targets: patch.targets ?? current.targets,
       locators: patch.locators ?? current.locators,
+      runs: patch.runs ?? current.runs,
+      results: patch.results ?? current.results,
+      suites: patch.suites ?? current.suites,
+      scripts: patch.scripts ?? current.scripts,
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
   } catch {}
@@ -232,6 +272,9 @@ async function api<T>(path: string, options?: RequestInit): Promise<T> {
             cases: local.allCases,
             targets: Object.values(local.targets),
             locators: local.locators,
+            suites: local.suites,
+            runs: local.runs,
+            results: local.results,
           }),
         });
         response = await fetch(url, {
@@ -299,6 +342,9 @@ export default function Workbench() {
               cases: local.allCases,
               targets: Object.values(local.targets),
               locators: local.locators,
+              suites: local.suites,
+              runs: local.runs,
+              results: local.results,
             }),
           });
         } catch {
@@ -319,19 +365,17 @@ export default function Workbench() {
 
       const storyMap = new Map<string, Requirement>();
       local.requirements.forEach((r) => storyMap.set(r.id, r));
-      stories.forEach((r) => storyMap.set(r.id, { ...storyMap.get(r.id), ...r }));
+      (stories || []).forEach((r) => storyMap.set(r.id, { ...storyMap.get(r.id), ...r }));
       const mergedStories = Array.from(storyMap.values());
 
       // Merge cases: local is the source of truth for status on ephemeral servers.
-      // If the local version is Approved/Rejected but server says Draft, keep local status.
       const caseMap = new Map<string, TestCase>();
       local.allCases.forEach((c) => caseMap.set(c.id, c));
-      cases.forEach((c) => {
+      (cases || []).forEach((c) => {
         const existing = caseMap.get(c.id);
         if (existing) {
           const localStatus = existing.status;
           const serverStatus = c.status;
-          // Preserve local approval status if server has stale Draft
           const keepLocalStatus =
             (localStatus === "Approved" || localStatus === "Rejected") &&
             serverStatus === "Draft";
@@ -346,29 +390,105 @@ export default function Workbench() {
       });
       const mergedCases = Array.from(caseMap.values());
 
-      updateLocalWorkspace({ requirements: mergedStories, allCases: mergedCases });
+      // Merge runs: combine local runs and server runs by id
+      const runMap = new Map<string, Run>();
+      local.runs.forEach((r) => runMap.set(r.id, r));
+      (history || []).forEach((r) => runMap.set(r.id, { ...(runMap.get(r.id) || {}), ...r }));
+      const mergedRuns = Array.from(runMap.values()).sort(
+        (a, b) => new Date(b.started_at).getTime() - new Date(a.started_at).getTime()
+      );
 
-      setDashboard(summary);
+      // Merge results: combine local results and server results
+      const resultMap = new Map<string, TestResult>();
+      local.results.forEach((r) => resultMap.set(`${r.run_id}-${r.test_case_id}`, r));
+      (reportData?.results || []).forEach((r) => {
+        const key = `${r.run_id}-${r.test_case_id}`;
+        resultMap.set(key, { ...(resultMap.get(key) || {}), ...r });
+      });
+      const mergedResults = Array.from(resultMap.values());
+
+      // Merge suites
+      const suiteMap = new Map<string, Suite>();
+      local.suites.forEach((s) => suiteMap.set(s.id, s));
+      (savedSuites || []).forEach((s) => suiteMap.set(s.id, { ...(suiteMap.get(s.id) || {}), ...s }));
+      const mergedSuites = Array.from(suiteMap.values());
+
+      // Build consolidated report
+      const counts: Record<string, number> = {};
+      mergedResults.forEach((r) => {
+        counts[r.status] = (counts[r.status] ?? 0) + 1;
+      });
+      const executed = (counts.PASS ?? 0) + (counts.FAIL ?? 0);
+      const consolidatedReport: Report = {
+        runs: mergedRuns,
+        results: mergedResults,
+        counts,
+        pass_rate: executed ? (counts.PASS ?? 0) / executed : 0,
+      };
+
+      // Build consolidated dashboard
+      const consolidatedDashboard = {
+        requirements: mergedStories.length,
+        test_cases: mergedCases.length,
+        results: mergedResults.length,
+        status_counts: counts,
+        recent_runs: mergedRuns.slice(0, 8),
+      };
+
+      updateLocalWorkspace({
+        requirements: mergedStories,
+        allCases: mergedCases,
+        runs: mergedRuns,
+        results: mergedResults,
+        suites: mergedSuites,
+      });
+
+      setDashboard(consolidatedDashboard);
       setRequirements(mergedStories);
       setAllCases(mergedCases);
-      setRuns(history);
-      setSuites(savedSuites);
-      setReport(reportData);
+      setRuns(mergedRuns);
+      setSuites(mergedSuites);
+      setReport(consolidatedReport);
       setSettings(settingsData);
 
       const nextId = targetId || mergedStories[0]?.id || "";
       setSelectedId(nextId);
       if (nextId) {
+        const cached = mergedStories.find((r) => r.id === nextId);
         try {
           const fullReq = await api<Requirement>(`/api/requirements/${nextId}`);
-          setSelected(fullReq);
+          const mergedTarget = fullReq.target || local.targets[nextId] || cached?.target || null;
+          const mergedLocators =
+            fullReq.locators && fullReq.locators.length > 0
+              ? fullReq.locators
+              : (local.locators.filter((l) => !l.requirement_id || l.requirement_id === nextId).length > 0
+                  ? local.locators.filter((l) => !l.requirement_id || l.requirement_id === nextId)
+                  : cached?.locators || []);
+          const mergedReq: Requirement = {
+            ...fullReq,
+            target: mergedTarget,
+            locators: mergedLocators,
+            cases: mergedCases.filter((c) => c.requirement_id === nextId),
+          };
+          setSelected(mergedReq);
           updateLocalWorkspace({
-            requirements: [fullReq, ...mergedStories.filter((r) => r.id !== fullReq.id)],
+            requirements: [mergedReq, ...mergedStories.filter((r) => r.id !== mergedReq.id)],
+            targets: mergedTarget ? { ...local.targets, [nextId]: mergedTarget } : local.targets,
           });
         } catch {
-          const cached = mergedStories.find((r) => r.id === nextId);
           if (cached) {
-            setSelected(cached);
+            const cachedTarget = local.targets[nextId] || cached.target || null;
+            const cachedLocators =
+              cached.locators && cached.locators.length > 0
+                ? cached.locators
+                : local.locators.filter((l) => !l.requirement_id || l.requirement_id === nextId);
+            const mergedReq: Requirement = {
+              ...cached,
+              target: cachedTarget,
+              locators: cachedLocators,
+              cases: mergedCases.filter((c) => c.requirement_id === nextId),
+            };
+            setSelected(mergedReq);
           }
         }
       } else {
@@ -404,11 +524,40 @@ export default function Workbench() {
       setSelected(null);
       return;
     }
+    const local = getLocalWorkspace();
+    const cached = requirements.find((r) => r.id === id);
     try {
       const fullReq = await api<Requirement>(`/api/requirements/${id}`);
-      setSelected(fullReq);
+      const mergedTarget = fullReq.target || local.targets[id] || cached?.target || null;
+      const mergedLocators =
+        fullReq.locators && fullReq.locators.length > 0
+          ? fullReq.locators
+          : (local.locators.filter((l) => !l.requirement_id || l.requirement_id === id).length > 0
+              ? local.locators.filter((l) => !l.requirement_id || l.requirement_id === id)
+              : cached?.locators || []);
+      const mergedReq: Requirement = {
+        ...fullReq,
+        target: mergedTarget,
+        locators: mergedLocators,
+        cases: allCases.filter((c) => c.requirement_id === id),
+      };
+      setSelected(mergedReq);
     } catch (reason) {
-      setError((reason as Error).message);
+      if (cached) {
+        const cachedTarget = local.targets[id] || cached.target || null;
+        const cachedLocators =
+          cached.locators && cached.locators.length > 0
+            ? cached.locators
+            : local.locators.filter((l) => !l.requirement_id || l.requirement_id === id);
+        setSelected({
+          ...cached,
+          target: cachedTarget,
+          locators: cachedLocators,
+          cases: allCases.filter((c) => c.requirement_id === id),
+        });
+      } else {
+        setError((reason as Error).message);
+      }
     }
   }
 
@@ -556,7 +705,10 @@ export default function Workbench() {
                   result.requirement,
                   ...local.requirements.filter((r) => r.id !== result.requirement.id),
                 ];
-                updateLocalWorkspace({ requirements: updatedReqs });
+                const updatedTargets = result.requirement.target
+                  ? { ...local.targets, [result.requirement.id]: result.requirement.target }
+                  : local.targets;
+                updateLocalWorkspace({ requirements: updatedReqs, targets: updatedTargets });
                 setRequirements(updatedReqs);
                 setSelectedId(result.requirement.id);
                 setSelected(result.requirement);
@@ -751,6 +903,43 @@ export default function Workbench() {
                     }),
                   }
                 );
+
+                // Immediately persist the execution run and test results into local workspace
+                const completedRun: Run = {
+                  id: res.run_id,
+                  started_at: new Date().toISOString(),
+                  finished_at: new Date().toISOString(),
+                  status: "COMPLETED",
+                  browser: selected?.target?.browser || "chromium",
+                  environment: selected?.target?.application_url || "API",
+                  summary: res.summary || {},
+                };
+
+                const completedResults: TestResult[] = (res.outcomes || []).map((o: any, idx: number) => {
+                  const matchingCase = casesForStory.find((c) => c.id === o.test_case_id);
+                  return {
+                    id: `RES-${res.run_id}-${o.test_case_id || idx}`,
+                    run_id: res.run_id,
+                    test_case_id: o.test_case_id,
+                    title: matchingCase?.title || o.test_case_id,
+                    requirement_id: selected.id,
+                    priority: matchingCase?.priority || "Medium",
+                    test_type: matchingCase?.test_type || "Functional",
+                    status: o.status || "PASS",
+                    duration: Number(o.duration || 0),
+                    error: o.error || "",
+                    browser: selected?.target?.browser || "chromium",
+                    run_started_at: completedRun.started_at,
+                    steps: o.steps || [],
+                  };
+                });
+
+                const local = getLocalWorkspace();
+                const updatedRuns = [completedRun, ...local.runs.filter((r) => r.id !== completedRun.id)];
+                const updatedResults = [...completedResults, ...local.results.filter((r) => r.run_id !== completedRun.id)];
+                updateLocalWorkspace({ runs: updatedRuns, results: updatedResults });
+                setRuns(updatedRuns);
+
                 setNotice(
                   `Batch execution completed (Run ${res.run_id}). Passed: ${
                     res.summary?.PASS ?? 0
@@ -778,17 +967,39 @@ export default function Workbench() {
             cases={allCases}
             onSave={(suite) =>
               act("Saving test suite...", async () => {
-                await api("/api/suites", {
-                  method: "POST",
-                  body: JSON.stringify(suite),
-                });
+                const suiteId = `SUITE-${Date.now()}`;
+                const newSuite: Suite = {
+                  id: suiteId,
+                  name: suite.name,
+                  description: suite.description,
+                  case_count: suite.case_ids.length,
+                  case_ids: suite.case_ids,
+                };
+                const local = getLocalWorkspace();
+                const updatedSuites = [newSuite, ...local.suites.filter((s) => s.name !== suite.name)];
+                updateLocalWorkspace({ suites: updatedSuites });
+                setSuites(updatedSuites);
+                try {
+                  await api("/api/suites", {
+                    method: "POST",
+                    body: JSON.stringify(suite),
+                  });
+                } catch (e) {
+                  console.warn("Server suite save notice:", e);
+                }
                 setNotice("Test suite saved.");
                 await refresh(selectedId);
               })
             }
             onDelete={(id) =>
               act("Deleting test suite...", async () => {
-                await api(`/api/suites/${id}`, { method: "DELETE" });
+                const local = getLocalWorkspace();
+                const updatedSuites = local.suites.filter((s) => s.id !== id);
+                updateLocalWorkspace({ suites: updatedSuites });
+                setSuites(updatedSuites);
+                try {
+                  await api(`/api/suites/${id}`, { method: "DELETE" });
+                } catch {}
                 setNotice("Suite deleted.");
                 await refresh(selectedId);
               })
@@ -1939,9 +2150,20 @@ function ScriptsView({
   useEffect(() => {
     if (activeCase) {
       setActiveCaseId(activeCase.id);
-      api<{ source: string }>(`/api/cases/${activeCase.id}/script`)
-        .then((res) => setSource(res.source || ""))
-        .catch(() => setSource(""));
+      const local = getLocalWorkspace();
+      if (local.scripts?.[activeCase.id]) {
+        setSource(local.scripts[activeCase.id]);
+      } else {
+        api<{ source: string }>(`/api/cases/${activeCase.id}/script`)
+          .then((res) => {
+            setSource(res.source || "");
+            if (res.source) {
+              const cur = getLocalWorkspace();
+              updateLocalWorkspace({ scripts: { ...cur.scripts, [activeCase.id]: res.source } });
+            }
+          })
+          .catch(() => setSource(""));
+      }
     } else {
       setSource("");
     }
@@ -1952,9 +2174,15 @@ function ScriptsView({
     await run(`Generating Playwright Python script for ${activeCase.id}...`, async () => {
       const res = await api<{ source: string }>(`/api/cases/${activeCase.id}/script`, {
         method: "POST",
-        body: JSON.stringify({ case_id: activeCase.id }),
+        body: JSON.stringify({
+          case_id: activeCase.id,
+          case: activeCase,
+          target: selected?.target,
+        }),
       });
       setSource(res.source);
+      const cur = getLocalWorkspace();
+      updateLocalWorkspace({ scripts: { ...cur.scripts, [activeCase.id]: res.source } });
       onMessage(`Generated script for ${activeCase.id}. Review and save it before standalone execution.`);
     });
   }
@@ -1962,6 +2190,8 @@ function ScriptsView({
   async function save() {
     if (!activeCase || !source.trim()) return;
     await run("Validating syntax and saving script...", async () => {
+      const cur = getLocalWorkspace();
+      updateLocalWorkspace({ scripts: { ...cur.scripts, [activeCase.id]: source } });
       await api(`/api/cases/${activeCase.id}/script`, {
         method: "PUT",
         body: JSON.stringify({ source }),
@@ -2240,8 +2470,18 @@ function HistoryView({
     if (chosen) {
       setSelectedRunId(chosen.id);
       api<typeof detail>(`/api/runs/${chosen.id}`)
-        .then(setDetail)
-        .catch(() => setDetail(null));
+        .then((res) => {
+          if (res && res.results && res.results.length > 0) {
+            setDetail(res);
+          } else {
+            const localResults = getLocalWorkspace().results.filter((r) => r.run_id === chosen.id);
+            setDetail({ run: chosen, results: localResults });
+          }
+        })
+        .catch(() => {
+          const localResults = getLocalWorkspace().results.filter((r) => r.run_id === chosen.id);
+          setDetail({ run: chosen, results: localResults });
+        });
     } else {
       setDetail(null);
     }

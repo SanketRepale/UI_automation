@@ -1,5 +1,0 @@
-content = open('src/ui_automation/api.py').read()
-content = content.replace('    @api.post("/api/settings"', '@api.post("/api/settings"')
-content = content.replace('    async def update_settings', 'async def update_settings')
-open('src/ui_automation/api.py', 'w').write(content)
-print('Fixed')

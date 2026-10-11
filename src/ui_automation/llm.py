@@ -29,8 +29,7 @@ class LLMProvider:
             raise LLMError("LLM is not configured. Set LLM_MODEL and LLM_API_KEY, or use the clearly labeled offline draft mode.")
         if self.provider in {"gemini", "google"}:
             preferred = (self.model or "gemini-3.7-flash").strip()
-            if preferred.startswith("models/"):
-                preferred = preferred[7:]
+            preferred = preferred.removeprefix("models/")
             models_to_try = [preferred]
             for fallback in ("gemini-3.7-flash", "gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"):
                 if fallback not in models_to_try:
@@ -75,8 +74,7 @@ class LLMProvider:
                         content = content[7:]
                     elif content.startswith("```"):
                         content = content[3:]
-                    if content.endswith("```"):
-                        content = content[:-3]
+                    content = content.removesuffix("```")
                     return json.loads(content.strip())
                 except urllib.error.HTTPError as error:
                     try:
@@ -117,8 +115,7 @@ class LLMProvider:
                                     fb_content = fb_content[7:]
                                 elif fb_content.startswith("```"):
                                     fb_content = fb_content[3:]
-                                if fb_content.endswith("```"):
-                                    fb_content = fb_content[:-3]
+                                fb_content = fb_content.removesuffix("```")
                                 return json.loads(fb_content.strip())
                         except Exception as fb_err:
                             msg = f"{msg} (fallback prompt failed: {fb_err})"
@@ -176,8 +173,7 @@ class LLMProvider:
                 content = content[7:]
             elif content.startswith("```"):
                 content = content[3:]
-            if content.endswith("```"):
-                content = content[:-3]
+            content = content.removesuffix("```")
             return json.loads(content.strip())
         except urllib.error.HTTPError as error:
             try:

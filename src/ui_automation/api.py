@@ -1,26 +1,38 @@
 from __future__ import annotations
 
 import asyncio
-import logging
+import csv
+import io
+import json
 import os
 import re
 import secrets
 import uuid
-import csv
-import io
-import json
 import zipfile
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from dataclasses import replace
-from fastapi import Body, Depends, FastAPI, File, HTTPException, Request, UploadFile, status
+from fastapi import (
+    Body,
+    Depends,
+    FastAPI,
+    File,
+    HTTPException,
+    Request,
+    UploadFile,
+    status,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 
-from ui_automation.agents import PlaywrightScriptAgent, RequirementAgent, TestCaseAgent, TestCaseReviewAgent
+from ui_automation.agents import (
+    PlaywrightScriptAgent,
+    RequirementAgent,
+    TestCaseAgent,
+    TestCaseReviewAgent,
+)
 from ui_automation.config import Settings, settings
 from ui_automation.database import Database
 from ui_automation.documents import extract_text
@@ -148,6 +160,10 @@ def _allowed_origins(value: str) -> list[str]:
     return origins or ["http://localhost:3000"]
 
 
+def _is_production(app_settings: Settings) -> bool:
+    return app_settings.environment.lower() == "production"
+
+
 def _safe_upload_name(name: str | None) -> str:
     cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "_", Path(name or "document").name).strip(".")
     return cleaned[:180] or "document"
@@ -187,23 +203,31 @@ def _runtime_credentials(app_settings: Settings, credentials: dict[str, Any] | N
     return {}
 
 
-def _browser_execution_enabled() -> bool:
+def _browser_execution_enabled(app_settings: Settings) -> bool:
     if os.getenv("VERCEL", "").lower() == "1":
         return False
-    return os.getenv("EXECUTION_ENABLED", "true").strip().lower() == "true"
+    return app_settings.execution_enabled
+
+
+def _browser_execution_enabled_legacy() -> bool:
+    """Backward-compatible wrapper using global settings."""
+    if os.getenv("VERCEL", "").lower() == "1":
+        return False
+    return settings.execution_enabled
 
 
 def create_app(app_settings: Settings = settings) -> FastAPI:
     services = AppServices(app_settings)
     api = FastAPI(title="Fieldnotes QA API", version="1.0.0", docs_url="/api/docs", redoc_url=None)
     allowed_origins = _allowed_origins(os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:3001,http://127.0.0.1:3000,http://127.0.0.1:3001"))
+    allow_origin_regex = None if _is_production(app_settings) else r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$|^https://.*\.vercel\.app$"
     api.add_middleware(
         CORSMiddleware,
         allow_origins=allowed_origins,
-        allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$|^https://.*\.vercel\.app$",
+        allow_origin_regex=allow_origin_regex,
         allow_credentials=True,
         allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD"],
-        allow_headers=["*"],
+        allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
     )
 
     @api.middleware("http")
@@ -214,7 +238,8 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
             response = await call_next(request)
         except Exception as error:
             services.logger.exception("api_request_failed", extra={"request_id": request_id, "path": request.url.path})
-            response = JSONResponse(status_code=500, content={"detail": f"An unexpected server error occurred: {error}", "request_id": request_id})
+            detail = "An unexpected server error occurred" if _is_production(app_settings) else f"An unexpected server error occurred: {error}"
+            response = JSONResponse(status_code=500, content={"detail": detail, "request_id": request_id})
         response.headers["X-Request-ID"] = request_id
         return response
 
@@ -376,8 +401,8 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
                 services.repository.save_requirement_target({"requirement_id": requirement_id, "application_url": application_url, "authentication_type": application.get("authentication_type") or "No Authentication", "browser": application.get("browser") or "chromium", "headless": application.get("execution_mode", "headless") == "headless", "username_label": application.get("username_label") or "", "password_label": application.get("password_label") or "", "submit_label": application.get("submit_label") or "", "guidance": ""})
             log_event(services.logger, "RequirementAPI", "requirement_analyzed", requirement_id=requirement_id, analysis_mode=mode)
             response: dict[str, Any] = {"requirement": await requirement(requirement_id), "mode": mode}
-            if application.get("authentication_type") == "Username & Password" and application.get("username") and application.get("password"):
-                response["session_credentials"] = {"username": application["username"], "password": application["password"]}
+            # Credentials are NOT returned in API response for security.
+            # Frontend must collect credentials from user and send with discover/execute requests.
             return response
         except HTTPException:
             raise
@@ -413,7 +438,7 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
             locator_svc = None  # type: ignore[assignment]
 
         # Step 1: Try browser-based discovery (only on non-serverless with Playwright)
-        if locator_svc is not None and _browser_execution_enabled():
+        if locator_svc is not None and _browser_execution_enabled(services.settings):
             try:
                 locators = await asyncio.to_thread(
                     locator_svc.discover,
@@ -438,8 +463,7 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
 
         # Step 3: If LocatorService couldn't even be imported, do inline heuristic
         if not locators and locator_svc is None:
-            from datetime import timezone as _tz
-            now_iso = datetime.now(_tz.utc).isoformat()
+            now_iso = datetime.now(UTC).isoformat()
             heuristic_defaults = [
                 {"element": "Username field", "tag": "input", "xpath": "//input[@name='username' or @type='email' or @id='username']"},
                 {"element": "Password field", "tag": "input", "xpath": "//input[@type='password' or @name='password' or @id='password']"},
@@ -450,10 +474,10 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
             for d in heuristic_defaults:
                 locators.append({
                     "element": d["element"], "tag": d["tag"], "xpath": d["xpath"],
-                    "candidates": [{"kind": "xpath", "value": d["xpath"], "valid": True, "count": 1}],
-                    "selected": d["xpath"], "validated": True, "confidence": 0.70,
+                    "candidates": [{"kind": "xpath", "value": d["xpath"], "valid": False, "count": 0, "reason": "heuristic only"}],
+                    "selected": d["xpath"], "validated": False, "confidence": 0.10,
                     "guidance_matches": [], "page_url": app_url,
-                    "last_validated": now_iso, "explanation": "Heuristic default (Playwright unavailable).",
+                    "last_validated": now_iso, "explanation": "Heuristic default (Playwright unavailable) — NOT validated.",
                 })
 
         # Step 4: Persist discovered locators
@@ -508,8 +532,8 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
         case = _require_case(services.repository, case_id)
         requirement_item = _require_requirement(services.repository, case["requirement_id"])
         generated, mode = TestCaseAgent(services.settings.skills_dir, services.provider()).generate(case["requirement_id"], requirement_item["analysis"])
-        negative = bool(re.search(r"negative|validation|invalid", f"{case.get('test_type', '')} {case.get('title', '')}", re.I))
-        replacement = next((item for item in generated if bool(re.search(r"negative|validation|invalid", f"{item.get('test_type', '')} {item.get('title', '')}", re.I)) == negative), None)
+        negative = bool(re.search(r"negative|validation|invalid", f"{case.get('test_type', '')} {case.get('title', '')}", re.IGNORECASE))
+        replacement = next((item for item in generated if bool(re.search(r"negative|validation|invalid", f"{item.get('test_type', '')} {item.get('title', '')}", re.IGNORECASE)) == negative), None)
         if not replacement:
             raise HTTPException(status_code=422, detail="Generator returned no replacement for this scenario type")
         replacement.update({"id": case_id, "requirement_id": case["requirement_id"], "status": "Draft"})
@@ -626,7 +650,7 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
         case = _require_case(services.repository, case_id)
         run_id = f"RUN-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
 
-        if not _browser_execution_enabled():
+        if not _browser_execution_enabled(services.settings):
             # Serverless simulated execution — build context safely without requiring a target
             target = services.repository.requirement_target(case["requirement_id"])
             target_url = target["application_url"] if target else "https://example.com"
@@ -638,15 +662,15 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
                     "step_number": step_num,
                     "action": s.get("action", ""),
                     "expected": s.get("expected", s.get("expected_result", "")),
-                    "actual": f"Validated: {s.get('action', '')}",
-                    "status": "PASS",
-                    "duration": 0.12,
+                    "actual": "Serverless mode — no browser execution. Step not verified.",
+                    "status": "SIMULATED",
+                    "duration": 0.0,
                 })
             outcome = {
                 "test_case_id": case_id,
-                "status": "PASS",
-                "duration": round(len(step_results) * 0.12, 2),
-                "error": "",
+                "status": "SIMULATED",
+                "duration": 0.0,
+                "error": "Browser execution disabled (EXECUTION_ENABLED=false or VERCEL=1). Run on a worker with Playwright for real results.",
                 "steps": step_results,
             }
             services.repository.create_run(run_id, target_url, f"{browser_label} (serverless)")
@@ -680,7 +704,7 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
         browser_name = (target.get("browser") if target else "chromium") or "chromium"
         run_id = f"RUN-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
 
-        if not _browser_execution_enabled():
+        if not _browser_execution_enabled(services.settings):
             # Serverless simulated execution
             if request.requirement_id and not any(r["id"] == request.requirement_id for r in services.repository.requirements()):
                 try:
@@ -710,15 +734,15 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
                         "step_number": step_num,
                         "action": s.get("action", ""),
                         "expected": s.get("expected", s.get("expected_result", "")),
-                        "actual": f"Validated: {s.get('action', '')}",
-                        "status": "PASS",
-                        "duration": 0.12,
+                        "actual": "Serverless mode — no browser execution. Step not verified.",
+                        "status": "SIMULATED",
+                        "duration": 0.0,
                     })
                 outcome = {
                     "test_case_id": case_id,
-                    "status": "PASS",
-                    "duration": round(len(step_results) * 0.12, 2),
-                    "error": "",
+                    "status": "SIMULATED",
+                    "duration": 0.0,
+                    "error": "Browser execution disabled (EXECUTION_ENABLED=false or VERCEL=1). Run on a worker with Playwright for real results.",
                     "steps": step_results,
                 }
                 services.repository.save_result(run_id, case_id, outcome["status"], outcome["duration"], outcome["error"], {"mode": "serverless"}, outcome["steps"])
@@ -726,7 +750,7 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
 
             summary = dict(Counter(item["status"] for item in outcomes))
             summary["total"] = len(outcomes)
-            summary["duration"] = round(sum(item["duration"] for item in outcomes), 3)
+            summary["duration"] = 0.0
             services.repository.finish_run(run_id, summary)
             return {"run_id": run_id, "summary": summary, "outcomes": outcomes}
 
@@ -960,7 +984,7 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
             "browser": services.settings.browser or "chromium",
             "headless": services.settings.headless,
             "timeout_ms": services.settings.timeout_ms,
-            "execution_enabled": _browser_execution_enabled(),
+            "execution_enabled": _browser_execution_enabled(services.settings),
             "storage": "ephemeral /tmp" if os.getenv("VERCEL", "").lower() == "1" else "local SQLite",
             "database_path": str(services.settings.database_path),
             "evidence_dir": str(services.settings.evidence_dir),
@@ -984,7 +1008,42 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
             new_kwargs["headless"] = update.headless
         if update.timeout_ms is not None:
             new_kwargs["timeout_ms"] = update.timeout_ms
-        services.settings = replace(current, **new_kwargs)
+        # Create new Settings instance with updated values
+        services.settings = Settings(
+            data_dir=current.data_dir,
+            database_path=current.database_path,
+            uploads_dir=current.uploads_dir,
+            evidence_dir=current.evidence_dir,
+            scripts_dir=current.scripts_dir,
+            reports_dir=current.reports_dir,
+            skills_dir=current.skills_dir,
+            llm_provider=current.llm_provider,
+            llm_base_url=current.llm_base_url,
+            llm_model=current.llm_model,
+            llm_api_key=current.llm_api_key,
+            target_url=current.target_url,
+            authentication_type=current.authentication_type,
+            target_environment=current.target_environment,
+            target_username=current.target_username,
+            target_password=current.target_password,
+            username_label=current.username_label,
+            password_label=current.password_label,
+            submit_label=current.submit_label,
+            browser=current.browser,
+            headless=current.headless,
+            browser_configured=current.browser_configured,
+            mode_configured=current.mode_configured,
+            timeout_ms=current.timeout_ms,
+            screenshot_on_pass=current.screenshot_on_pass,
+            screenshot_on_failure=current.screenshot_on_failure,
+            api_auth_token=current.api_auth_token,
+            cors_origins=current.cors_origins,
+            execution_enabled=current.execution_enabled,
+            environment=current.environment,
+        )
+        # Apply updates
+        for key, value in new_kwargs.items():
+            setattr(services.settings, key, value)
         return await get_settings()
 
     @api.get("/api/runs/{run_id}", dependencies=[Depends(authenticate)])

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from ui_automation.config import Settings
@@ -88,7 +88,7 @@ class LocatorService:
                 explanation = f"Primary XPath was validated against the live element. {xpath_reason} {len(alternatives)} unique alternative locator(s) are available as fallbacks."
                 if guidance_matches:
                     explanation += " Guidance matched: " + ", ".join(guidance_matches) + "."
-                results.append({"element": text, "tag": element["tag"], "xpath": xpath, "candidates": candidates, "selected": xpath, "validated": xpath_count == 1, "confidence": 0.95 if xpath_count == 1 and "positional" not in xpath_reason.lower() else 0.75, "guidance_matches": guidance_matches, "page_url": page.url, "last_validated": datetime.now(timezone.utc).isoformat(), "explanation": explanation})
+                results.append({"element": text, "tag": element["tag"], "xpath": xpath, "candidates": candidates, "selected": xpath, "validated": xpath_count == 1, "confidence": 0.95 if xpath_count == 1 and "positional" not in xpath_reason.lower() else 0.75, "guidance_matches": guidance_matches, "page_url": page.url, "last_validated": datetime.now(UTC).isoformat(), "explanation": explanation})
             return results
 
     @staticmethod
@@ -121,7 +121,7 @@ class LocatorService:
         password_candidates.append(page.locator("input[type='password']"))
         submit_candidates = [page.get_by_role("button", name=submit_label, exact=True)] if submit_label else []
         submit_candidates.extend([
-            page.get_by_role("button", name=re.compile(r"log\s*in|sign\s*in|submit|continue|next|verify|authenticate", re.I)),
+            page.get_by_role("button", name=re.compile(r"log\s*in|sign\s*in|submit|continue|next|verify|authenticate", re.IGNORECASE)),
             page.locator("button[type='submit'], input[type='submit'], [role='button'][type='submit']"),
             page.locator("form button:not([type='button'])"),
         ])
@@ -218,7 +218,7 @@ class LocatorService:
                 xpath_attribute = "aria-label" if attribute == "aria_label" else attribute
                 return f"//{element['tag']}[@{xpath_attribute}={LocatorService._xpath_literal(str(value))}]"
         identifier = str(element.get("id", ""))
-        if identifier and not re.search(r"(?:^|[-_])[0-9a-f]{6,}$|\\d{5,}", identifier, re.I):
+        if identifier and not re.search(r"(?:^|[-_])[0-9a-f]{6,}$|\\d{5,}", identifier, re.IGNORECASE):
             return f"//{element['tag']}[@id={LocatorService._xpath_literal(identifier)}]"
         return f"(//{element['tag']})[{int(element['index']) + 1}]"
 
@@ -227,7 +227,7 @@ class LocatorService:
         attribute_candidates: list[tuple[str, str]] = []
         for key, attribute in (("test_id", "data-testid"), ("id", "id"), ("name", "name"), ("aria_label", "aria-label"), ("placeholder", "placeholder")):
             value = element.get(key)
-            if value and (key != "id" or not re.search(r"(?:^|[-_])[0-9a-f]{6,}$|\d{5,}", str(value), re.I)):
+            if value and (key != "id" or not re.search(r"(?:^|[-_])[0-9a-f]{6,}$|\d{5,}", str(value), re.IGNORECASE)):
                 attribute_candidates.append((f"//{tag}[@{attribute}={self._xpath_literal(str(value))}]", f"matched the element's {attribute} attribute"))
         visible_text = element.get("visible_text", "")
         if visible_text:
@@ -237,7 +237,7 @@ class LocatorService:
         for ancestor in element.get("ancestors", []):
             for key, attribute in (("test_id", "data-testid"), ("id", "id"), ("aria_label", "aria-label")):
                 value = ancestor.get(key)
-                if not value or (key == "id" and re.search(r"(?:^|[-_])[0-9a-f]{6,}$|\d{5,}", str(value), re.I)):
+                if not value or (key == "id" and re.search(r"(?:^|[-_])[0-9a-f]{6,}$|\d{5,}", str(value), re.IGNORECASE)):
                     continue
                 anchor = f"//*[@{attribute}={self._xpath_literal(str(value))}]"
                 for suffix, reason in base_attribute_candidates:
@@ -419,7 +419,7 @@ class LocatorService:
                     "confidence": 0.90 if elem_id or elem_name or elem_testid else 0.80,
                     "guidance_matches": self._guidance_matches(guidance, {"text": label, "id": elem_id, "name": elem_name, "tag": tag}),
                     "page_url": url,
-                    "last_validated": datetime.now(timezone.utc).isoformat(),
+                    "last_validated": datetime.now(UTC).isoformat(),
                     "explanation": f"Discovered from HTML structure of {url}.",
                 })
 
@@ -451,7 +451,7 @@ class LocatorService:
                             "confidence": 0.88,
                             "guidance_matches": self._guidance_matches(guidance, loc),
                             "page_url": url,
-                            "last_validated": datetime.now(timezone.utc).isoformat(),
+                            "last_validated": datetime.now(UTC).isoformat(),
                             "explanation": "Synthesized by AI from acceptance criteria and UI specifications.",
                         })
             except Exception:
@@ -469,9 +469,9 @@ class LocatorService:
             for d in defaults:
                 xpath = d["xpath"]
                 candidates = [
-                    {"kind": "xpath", "value": xpath, "valid": True, "count": 1},
-                    {"kind": "id", "value": d["id"], "valid": True, "count": 1},
-                    {"kind": "name", "value": d["name"], "valid": True, "count": 1},
+                    {"kind": "xpath", "value": xpath, "valid": False, "count": 0, "reason": "heuristic only"},
+                    {"kind": "id", "value": d["id"], "valid": False, "count": 0, "reason": "heuristic only"},
+                    {"kind": "name", "value": d["name"], "valid": False, "count": 0, "reason": "heuristic only"},
                 ]
                 results.append({
                     "element": d["element"],
@@ -479,12 +479,12 @@ class LocatorService:
                     "xpath": xpath,
                     "candidates": candidates,
                     "selected": xpath,
-                    "validated": True,
-                    "confidence": 0.85,
+                    "validated": False,
+                    "confidence": 0.10,
                     "guidance_matches": self._guidance_matches(guidance, d),
                     "page_url": url,
-                    "last_validated": datetime.now(timezone.utc).isoformat(),
-                    "explanation": f"Heuristic standard element template for {url}.",
+                    "last_validated": datetime.now(UTC).isoformat(),
+                    "explanation": f"Heuristic standard element template for {url} — NOT validated.",
                 })
 
         return sorted(results, key=lambda item: len(item.get("guidance_matches", [])), reverse=True)

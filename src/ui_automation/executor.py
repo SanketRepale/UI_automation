@@ -4,8 +4,7 @@ import logging
 import re
 import time
 import uuid
-from datetime import datetime, timezone
-from pathlib import Path
+from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -57,7 +56,7 @@ class ExecutionService:
                     self._log("authentication_completed", run_id, case["id"], authentication_type="Username & Password")
                 for index, step in enumerate(case.get("steps", []), 1):
                     step_start = time.perf_counter()
-                    started_at = datetime.now(timezone.utc).isoformat()
+                    started_at = datetime.now(UTC).isoformat()
                     action = str(step.get("action", ""))
                     locator_requirement = str(step.get("locator_requirement", ""))
                     locator_entry = self._match_locator(action, locators, locator_requirement)
@@ -126,7 +125,7 @@ class ExecutionService:
                     if step_error:
                         log_fields["error"] = self._redact(step_error, secrets)
                     self._log("step_completed" if status == "PASS" else "step_failed", run_id, case["id"], level=logging.INFO if status == "PASS" else logging.WARNING, **log_fields)
-                    step_results.append({"step_number": index, "action": action, "expected": step.get("expected_result", ""), "actual": actual, "status": status, "started_at": started_at, "ended_at": datetime.now(timezone.utc).isoformat(), "duration": round(time.perf_counter() - step_start, 3), "locator": locator_used if locator_entry and locator is not None else locator_entry.get("xpath", "") if locator_entry else "", "error": step_error, "screenshot_path": screenshot_path, "before_screenshot_path": before_screenshot_path, "page_url": page.url, "page_title": page.title()})
+                    step_results.append({"step_number": index, "action": action, "expected": step.get("expected_result", ""), "actual": actual, "status": status, "started_at": started_at, "ended_at": datetime.now(UTC).isoformat(), "duration": round(time.perf_counter() - step_start, 3), "locator": locator_used if locator_entry and locator is not None else locator_entry.get("xpath", "") if locator_entry else "", "error": step_error, "screenshot_path": screenshot_path, "before_screenshot_path": before_screenshot_path, "page_url": page.url, "page_title": page.title()})
                     if status != "PASS":
                         overall = "BLOCKED" if status == "BLOCKED" and overall == "PASS" else "FAIL"
                         error_summary = step_error
@@ -141,7 +140,7 @@ class ExecutionService:
             error_summary = self._redact(f"{type(error).__name__}: {error}", secrets)
             self._log("execution_blocked", run_id, case["id"], level=logging.ERROR, error=error_summary, target_url=self._safe_url(target_url))
             if not step_results:
-                step_results.append({"step_number": 0, "action": "Launch browser and open target", "expected": "Target application is reachable", "actual": "Execution could not start.", "status": "BLOCKED", "started_at": datetime.now(timezone.utc).isoformat(), "ended_at": datetime.now(timezone.utc).isoformat(), "duration": round(time.perf_counter() - started, 3), "locator": "", "error": error_summary, "screenshot_path": "", "page_url": target_url, "page_title": ""})
+                step_results.append({"step_number": 0, "action": "Launch browser and open target", "expected": "Target application is reachable", "actual": "Execution could not start.", "status": "BLOCKED", "started_at": datetime.now(UTC).isoformat(), "ended_at": datetime.now(UTC).isoformat(), "duration": round(time.perf_counter() - started, 3), "locator": "", "error": error_summary, "screenshot_path": "", "page_url": target_url, "page_title": ""})
         error_summary = self._redact(error_summary, secrets)
         for step in step_results:
             for key, value in step.items():
@@ -205,7 +204,7 @@ class ExecutionService:
             str(case.get("title", "")),
             *(str(step.get("action", "")) + " " + str(step.get("locator_requirement", "")) for step in case.get("steps", [])),
         ])
-        return bool(re.search(r"login|log\s*in|sign\s*in|credential|authentication|username.{0,40}password|account.{0,40}(?:identifier|secret)|identifier.{0,40}secret", context, re.I))
+        return bool(re.search(r"login|log\s*in|sign\s*in|credential|authentication|username.{0,40}password|account.{0,40}(?:identifier|secret)|identifier.{0,40}secret", context, re.IGNORECASE))
 
     @staticmethod
     def _runtime_test_data(value: Any, authentication: dict[str, Any] | None) -> str:

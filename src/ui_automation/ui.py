@@ -15,12 +15,16 @@ import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
 
-from ui_automation.agents import PlaywrightScriptAgent, RequirementAgent, TestCaseAgent, TestCaseReviewAgent
+from ui_automation.agents import (
+    PlaywrightScriptAgent,
+    RequirementAgent,
+    TestCaseAgent,
+    TestCaseReviewAgent,
+)
 from ui_automation.config import Settings
-from ui_automation.documents import extract_text
-from ui_automation.documents import extract_application_details
-from ui_automation.exporting import evidence_archive, make_export
+from ui_automation.documents import extract_application_details, extract_text
 from ui_automation.executor import ExecutionService
+from ui_automation.exporting import evidence_archive, make_export
 from ui_automation.llm import LLMProvider
 from ui_automation.locator_service import LocatorService
 from ui_automation.repository import Repository
@@ -189,7 +193,7 @@ def _requirements(repository: Repository, settings: Settings, llm: LLMProvider, 
                             "requirement_id": requirement_id,
                             "application_url": application_url,
                             "authentication_type": application.get("authentication_type") or settings.authentication_type or "No Authentication",
-                            "browser": application.get("browser") or (settings.browser if settings.browser_configured else "chromium"),
+                            "browser": application.get("browser") or settings.browser or "chromium",
                             "headless": application.get("execution_mode", "headless" if settings.headless else "headed") == "headless",
                             "username_label": application.get("username_label") or settings.username_label or "",
                             "password_label": application.get("password_label") or settings.password_label or "",
@@ -337,8 +341,8 @@ def _test_cases(repository: Repository, settings: Settings) -> None:
         try:
             with st.spinner("Regenerating the selected scenario…"):
                 regenerated, mode = TestCaseAgent(settings.skills_dir, _provider(settings)).generate(selected["requirement_id"], analysis)
-            selected_negative = bool(re.search(r"negative|validation|invalid", f"{selected.get('test_type', '')} {selected.get('title', '')}", re.I))
-            replacement = next((case for case in regenerated if bool(re.search(r"negative|validation|invalid", f"{case.get('test_type', '')} {case.get('title', '')}", re.I)) == selected_negative), None)
+            selected_negative = bool(re.search(r"negative|validation|invalid", f"{selected.get('test_type', '')} {selected.get('title', '')}", re.IGNORECASE))
+            replacement = next((case for case in regenerated if bool(re.search(r"negative|validation|invalid", f"{case.get('test_type', '')} {case.get('title', '')}", re.IGNORECASE)) == selected_negative), None)
             if not replacement:
                 st.error("The generator returned no replacement case for the selected scenario type.")
             else:
@@ -674,6 +678,7 @@ def _settings(settings: Settings, llm: LLMProvider) -> None:
     _title("Workspace / Config", "Settings", "Credentials are kept in process memory in this form and are never written to the database.")
     st.subheader("LLM provider")
     providers = ["gemini", "openai_compatible", "anthropic"]
+    configured_provider = settings.llm_provider
     provider_idx = providers.index(configured_provider) if configured_provider in providers else 0
     provider = st.selectbox("Provider", providers, index=provider_idx)
     if provider == "gemini":
@@ -696,6 +701,6 @@ def _settings(settings: Settings, llm: LLMProvider) -> None:
         st.rerun()
     st.info("For persistent configuration, copy `.env.example` to `.env` or set GEMINI_API_KEY / LLM_API_KEY in your deployment environment.")
     st.subheader("Browser and target")
-    st.code(f"TARGET_URL={'configured' if settings.target_url else 'not configured'}\nBROWSER={settings.browser or 'not configured'}\nHEADLESS={'headless' if settings.mode_configured and settings.headless else 'headed' if settings.mode_configured else 'not configured'}\nTIMEOUT_MS={settings.timeout_ms}", language="text")
+    st.code(f"TARGET_URL={'configured' if settings.target_url else 'not configured'}\nBROWSER={settings.browser or 'not configured'}\nHEADLESS={'headless' if settings.headless else 'headed'}\nTIMEOUT_MS={settings.timeout_ms}", language="text")
     st.caption(f"Database: {settings.database_path}\n\nEvidence: {settings.evidence_dir}")
     st.caption(f"Current LLM state: {'configured' if llm.configured else 'offline heuristic drafts only'}")

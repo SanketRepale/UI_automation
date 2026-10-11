@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from ui_automation.documents import extract_application_details, redact_credentials
-from ui_automation.llm import LLMError, LLMProvider
+from ui_automation.llm import LLMProvider
 
 
 class SkillAgent:
@@ -50,9 +50,9 @@ class RequirementAgent(SkillAgent):
         story_match = re.search(r"(?im)^.*\bAs\s+(?:a|an|the)\s+.+?(?:\r?\n(?:.{0,4}\S.*)?){0,2}", safe_text)
         story = "\n".join(line.strip() for line in story_match.group(0).splitlines()).strip() if story_match else ""
         criteria = extract_criteria(safe_text)
-        business_rules = [line for line in criteria if re.search(r"must|shall|required|mandatory|only|cannot|cannot|unique|maximum|minimum", line, re.I)]
-        positive = [line for line in criteria if not re.search(r"invalid|error|reject|must not|cannot|mandatory|required", line, re.I)]
-        negative = [line for line in criteria if re.search(r"invalid|error|reject|must not|cannot|mandatory|required", line, re.I)]
+        business_rules = [line for line in criteria if re.search(r"must|shall|required|mandatory|only|cannot|cannot|unique|maximum|minimum", line, re.IGNORECASE)]
+        positive = [line for line in criteria if not re.search(r"invalid|error|reject|must not|cannot|mandatory|required", line, re.IGNORECASE)]
+        negative = [line for line in criteria if re.search(r"invalid|error|reject|must not|cannot|mandatory|required", line, re.IGNORECASE)]
         ambiguity = []
         if not story:
             ambiguity.append("A user story could not be confidently identified in the uploaded documents.")
@@ -93,8 +93,8 @@ class TestCaseAgent(SkillAgent):
         criteria = [str(item).strip() for item in analysis.get("acceptance_criteria", []) if str(item).strip()]
         if not criteria:
             return [], "Offline heuristic draft"
-        negative_pattern = re.compile(r"invalid|error|reject|must not|cannot|empty|missing|locked|not allowed|denied", re.I)
-        negative_criteria = [criterion for criterion in criteria if negative_pattern.search(criterion) or re.search(r"mandatory|required", criterion, re.I)]
+        negative_pattern = re.compile(r"invalid|error|reject|must not|cannot|empty|missing|locked|not allowed|denied", re.IGNORECASE)
+        negative_criteria = [criterion for criterion in criteria if negative_pattern.search(criterion) or re.search(r"mandatory|required", criterion, re.IGNORECASE)]
         positive_criteria = [criterion for criterion in criteria if not negative_pattern.search(criterion)]
         positive_steps = _scenario_steps(positive_criteria, negative=False)
         positive_case = {
@@ -307,15 +307,15 @@ def extract_criteria(text: str) -> list[str]:
     items = []
     in_criteria = False
     for line in text.splitlines():
-        if re.match(r"^\s*(?:web\s+application\s+url|application\s+url|url|authentication|username|user\s+name|password|passwd|environment|browser|execution\s+mode)\s*[:=|]", line, re.I):
+        if re.match(r"^\s*(?:web\s+application\s+url|application\s+url|url|authentication|username|user\s+name|password|passwd|environment|browser|execution\s+mode)\s*[:=|]", line, re.IGNORECASE):
             in_criteria = False
             continue
-        heading = re.match(r"^\s*(?:#{1,6}\s*)?(acceptance\s+criteria|requirements|business\s+rules|test\s+data|scenarios)\s*:?[ \t]*$", line, re.I)
+        heading = re.match(r"^\s*(?:#{1,6}\s*)?(acceptance\s+criteria|requirements|business\s+rules|test\s+data|scenarios)\s*:?[ \t]*$", line, re.IGNORECASE)
         if heading:
             in_criteria = heading.group(1).lower().startswith(("acceptance", "requirements", "business", "scenarios"))
             continue
         cleaned = re.sub(r"^\s*(?:[-*]|\d+[.)])\s*", "", line).strip()
-        if in_criteria and cleaned and len(cleaned) > 12 and not re.match(r"^(?:as\s+(?:a|an)|user\s+story)\b", cleaned, re.I):
+        if in_criteria and cleaned and len(cleaned) > 12 and not re.match(r"^(?:as\s+(?:a|an)|user\s+story)\b", cleaned, re.IGNORECASE):
             items.append(cleaned)
     return items
 
@@ -325,7 +325,7 @@ def extract_test_data(text: str) -> list[str]:
     results = []
     collecting = False
     for line in lines:
-        if re.match(r"^\s*(?:#{1,6}\s*)?test\s+data\b", line, re.I):
+        if re.match(r"^\s*(?:#{1,6}\s*)?test\s+data\b", line, re.IGNORECASE):
             collecting = True
             continue
         if collecting and re.match(r"^\s*(?:#{1,6}\s*)?[A-Za-z][A-Za-z ]{2,30}:\s*$", line):
@@ -357,12 +357,12 @@ def normalize_case(case: dict[str, Any], requirement_id: str, index: int) -> dic
 def _criterion_field(criterion: str) -> str:
     pattern = re.compile(
         r"^\s*(?:the\s+|a\s+|an\s+)?([A-Za-z][A-Za-z0-9 _-]{0,40}?)\s+(?:is|are|must be|should be)\s+(?:required|mandatory|optional|valid|unique|provided|entered|selected)",
-        re.I,
+        re.IGNORECASE,
     )
     match = pattern.search(criterion.strip().rstrip("."))
     if not match:
         return ""
-    field = re.sub(r"^(?:a|an|the|valid|invalid)\s+", "", match.group(1).strip(), flags=re.I)
+    field = re.sub(r"^(?:a|an|the|valid|invalid)\s+", "", match.group(1).strip(), flags=re.IGNORECASE)
     return field[:1].upper() + field[1:]
 
 
@@ -380,7 +380,7 @@ def _scenario_steps(criteria: list[str], *, negative: bool) -> list[dict[str, An
             "assertion": assertion or {},
         })
 
-    login_related = any(re.search(r"login|log\s*in|sign\s*in|credential|username|password|authentication|account identifier|account secret|passphrase", item, re.I) for item in criteria)
+    login_related = any(re.search(r"login|log\s*in|sign\s*in|credential|username|password|authentication|account identifier|account secret|passphrase", item, re.IGNORECASE) for item in criteria)
     if login_related:
         for criterion in criteria:
             lowered = criterion.lower()
@@ -422,7 +422,7 @@ def _scenario_steps(criteria: list[str], *, negative: bool) -> list[dict[str, An
                     add("Verify login error message", "", criterion, assertion={"type": "validation_visible"})
         if steps:
             for index, step in enumerate(steps):
-                if not re.search(r"click.*button|submit.*form|sign-in", step["action"], re.I) or step.get("assertion"):
+                if not re.search(r"click.*button|submit.*form|sign-in", step["action"], re.IGNORECASE) or step.get("assertion"):
                     continue
                 following_assertion = next((item.get("assertion") for item in steps[index + 1:] if item.get("assertion")), None)
                 if following_assertion:
@@ -444,20 +444,20 @@ def _scenario_steps(criteria: list[str], *, negative: bool) -> list[dict[str, An
 
 def _destination_label(criterion: str) -> str:
     cleaned = re.sub(r"[*_`#]", "", criterion).strip().rstrip(".!?")
-    match = re.search(r"\b(?:to|into|onto)\s+(?:the\s+)?(.+?)\s+(?:page|screen|dashboard|workspace)\b", cleaned, re.I)
+    match = re.search(r"\b(?:to|into|onto)\s+(?:the\s+)?(.+?)\s+(?:page|screen|dashboard|workspace)\b", cleaned, re.IGNORECASE)
     return match.group(1).strip(" \"'“”") if match else ""
 
 
 def _button_label(criterion: str) -> str:
     cleaned = re.sub(r"[*_`#]", "", criterion).strip()
-    match = re.search(r"(?:click|press|select|activate)\s+(?:the\s+)?([A-Za-z][A-Za-z0-9 _-]{0,30}?)\s+button\b", cleaned, re.I)
+    match = re.search(r"(?:click|press|select|activate)\s+(?:the\s+)?([A-Za-z][A-Za-z0-9 _-]{0,30}?)\s+button\b", cleaned, re.IGNORECASE)
     return match.group(1).strip() if match else ""
 
 
 def _populate_step_test_data(cases: list[dict[str, Any]], analysis: dict[str, Any]) -> None:
     hints = [str(item) for item in analysis.get("test_data_requirements", []) if str(item).strip()]
     for case in cases:
-        negative = bool(re.search(r"negative|validation|invalid|missing|reject", f"{case.get('test_type', '')} {case.get('title', '')}", re.I))
+        negative = bool(re.search(r"negative|validation|invalid|missing|reject", f"{case.get('test_type', '')} {case.get('title', '')}", re.IGNORECASE))
         case_data = case.get("test_data") if isinstance(case.get("test_data"), dict) else {}
         generated_data = dict(case_data)
         for index, step in enumerate(case.get("steps", []), 1):
@@ -466,7 +466,7 @@ def _populate_step_test_data(cases: list[dict[str, Any]], analysis: dict[str, An
                 generated_data.setdefault(f"step_{step.get('number', index)}", current)
                 continue
             action = str(step.get("action", ""))
-            if not re.search(r"fill|enter|type|input|select|choose|search|leave|invalid|missing|empty", action, re.I):
+            if not re.search(r"fill|enter|type|input|select|choose|search|leave|invalid|missing|empty", action, re.IGNORECASE):
                 continue
             context = " ".join((
                 str(case.get("title", "")), str(case.get("test_type", "")), action,
@@ -526,8 +526,8 @@ def _synthetic_test_value(context: str, negative: bool, action: str) -> str:
 def _limit_story_cases(cases: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if not cases:
         return []
-    negative_pattern = re.compile(r"negative|validation|invalid|missing|required|reject|blocked|error|must not|not allowed|denied|unsuccessful", re.I)
-    positive_pattern = re.compile(r"positive|valid|success|successful|accepts|allows", re.I)
+    negative_pattern = re.compile(r"negative|validation|invalid|missing|required|reject|blocked|error|must not|not allowed|denied|unsuccessful", re.IGNORECASE)
+    positive_pattern = re.compile(r"positive|valid|success|successful|accepts|allows", re.IGNORECASE)
     positive = None
     negative = None
     for case in cases:
@@ -552,7 +552,7 @@ def _case_tests_authentication(case: dict[str, Any]) -> bool:
         str(case.get("title", "")),
         *(str(step.get("action", "")) + " " + str(step.get("locator_requirement", "")) for step in case.get("steps", [])),
     ])
-    return bool(re.search(r"login|log\s*in|sign\s*in|credential|authentication|username.{0,40}password|account.{0,40}(?:identifier|secret)|identifier.{0,40}secret", context, re.I))
+    return bool(re.search(r"login|log\s*in|sign\s*in|credential|authentication|username.{0,40}password|account.{0,40}(?:identifier|secret)|identifier.{0,40}secret", context, re.IGNORECASE))
 
 
 def _match_case_locator(action: str, locator_requirement: str, locators: list[dict[str, Any]]) -> dict[str, Any] | None:

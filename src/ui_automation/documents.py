@@ -58,7 +58,7 @@ def extract_application_details(text: str) -> dict[str, Any]:
                     values["username"] = parts.username
                 if parts.password and not values["password"]:
                     values["password"] = parts.password
-                safe_query = [(key, "[REDACTED]" if re.search(r"password|passwd|secret|token|api.?key|credential", key, re.I) else value) for key, value in parse_qsl(parts.query, keep_blank_values=True)]
+                safe_query = [(key, "[REDACTED]" if re.search(r"password|passwd|secret|token|api.?key|credential", key, re.IGNORECASE) else value) for key, value in parse_qsl(parts.query, keep_blank_values=True)]
                 clean_urls.append(urlunsplit((parts.scheme, parts.hostname + (f":{parts.port}" if parts.port else ""), parts.path, urlencode(safe_query, doseq=True), parts.fragment)))
         except ValueError:
             continue

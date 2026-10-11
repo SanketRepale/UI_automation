@@ -4,7 +4,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from ui_automation.api import _browser_execution_enabled, create_app
+from ui_automation.api import _browser_execution_enabled_legacy as _browser_execution_enabled, create_app
 from ui_automation.config import Settings, _env_int, _runtime_data_dir
 from ui_automation.database import Database
 from ui_automation.repository import Repository
@@ -75,13 +75,15 @@ def test_api_health_and_story_target_round_trip(tmp_path: Path) -> None:
     assert target.json()["application_url"] == "https://example.test/login"
 
 
-def test_uploaded_story_credentials_return_only_as_session_material(tmp_path: Path) -> None:
+def test_uploaded_story_credentials_not_in_response(tmp_path: Path) -> None:
     app_settings = Settings(database_path=tmp_path / "credentials.db", uploads_dir=tmp_path / "uploads", evidence_dir=tmp_path / "evidence", scripts_dir=tmp_path / "scripts", reports_dir=tmp_path / "reports")
     client = TestClient(create_app(app_settings))
     document = b"User Story: Sign in.\nAcceptance Criteria:\n1. Valid credentials open the workspace.\nWeb Application URL: https://example.test/login\nAuthentication: Username & Password\nUsername: member@example.test\nPassword: session-secret"
     response = client.post("/api/requirements/analyze", files={"files": ("auth.txt", document, "text/plain")})
     assert response.status_code == 200
-    assert response.json()["session_credentials"] == {"username": "member@example.test", "password": "session-secret"}
+    # Credentials should NOT be returned in API response for security
+    # Frontend must collect credentials from user and send with discover/execute requests
+    assert "session_credentials" not in response.json()
     requirement = response.json()["requirement"]
     assert "session-secret" not in str(requirement)
     assert "member@example.test" not in str(requirement)

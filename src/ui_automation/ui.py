@@ -77,7 +77,7 @@ def render(repository: Repository, settings: Settings, logger: logging.Logger) -
     elif page == "Execution History":
         _history(repository)
     elif page == "Reporting":
-        _reporting(repository)
+        _reporting(repository, settings)
     else:
         _settings(settings, llm)
 
@@ -599,7 +599,7 @@ def _history(repository: Repository) -> None:
                     st.json({key: value for key, value in details.items() if key != "steps"})
 
 
-def _reporting(repository: Repository) -> None:
+def _reporting(repository: Repository, settings: Settings) -> None:
     _title("08 / Outcomes", "Reporting", "Actionable results from persisted executions, not generated plans.")
     runs = repository.history()
     results = repository.results()
@@ -671,7 +671,7 @@ def _reporting(repository: Repository) -> None:
         for row in repository.results(latest["id"]):
             archive_results.append({**row, "steps": repository.step_results(row["id"])})
         scripts = {case["id"]: repository.latest_script(case["id"]) for case in repository.test_cases() if repository.latest_script(case["id"])}
-        st.download_button("Download latest run evidence ZIP", evidence_archive(archive_results, scripts, repository.locators()), f"{latest['id']}-evidence.zip", "application/zip")
+        st.download_button("Download latest run evidence ZIP", evidence_archive(archive_results, scripts, repository.locators(), repository, settings), f"{latest['id']}-evidence.zip", "application/zip")
 
 
 def _settings(settings: Settings, llm: LLMProvider) -> None:

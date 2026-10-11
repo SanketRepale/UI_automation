@@ -57,8 +57,8 @@ class TargetInput(BaseModel):
 class CredentialsInput(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    username: str = Field(min_length=1, max_length=320)
-    password: str = Field(min_length=1, max_length=1024)
+    username: str = Field(default="", max_length=320)
+    password: str = Field(default="", max_length=1024)
 
 
 class DiscoveryInput(BaseModel):
